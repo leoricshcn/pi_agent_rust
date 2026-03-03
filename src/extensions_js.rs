@@ -13581,8 +13581,8 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
     /// Register an additional filesystem root that `readFileSync` is allowed
     /// to access.  Called before loading each extension so it can read its own
     /// bundled assets (HTML templates, markdown docs, etc.).
-    pub fn add_allowed_read_root(&self, root: PathBuf) {
-        let canonical_root = crate::extensions::safe_canonicalize(&root);
+    pub fn add_allowed_read_root(&self, root: &std::path::Path) {
+        let canonical_root = crate::extensions::safe_canonicalize(root);
         if let Ok(mut roots) = self.allowed_read_roots.lock() {
             if !roots.contains(&canonical_root) {
                 roots.push(canonical_root);
@@ -13603,7 +13603,7 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
     /// apply stricter policy for official/first-party extensions and to allow
     /// same-scope package imports (`@scope/*`) when scope can be discovered.
     pub fn add_extension_root_with_id(&self, root: PathBuf, extension_id: Option<&str>) {
-        self.add_allowed_read_root(root.clone());
+        self.add_allowed_read_root(&root);
         let mut state = self.module_state.borrow_mut();
         if !state.extension_roots.contains(&root) {
             state
