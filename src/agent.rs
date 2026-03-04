@@ -3943,7 +3943,7 @@ mod abort_tests {
 
             assert_abort_resume_message_sequence(&persisted);
 
-            let timeline = timeline.lock().expect("timeline lock").clone();
+            let timeline = timeline.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
             assert_abort_resume_timeline_boundaries(&timeline);
         });
     }
@@ -4221,7 +4221,7 @@ mod turn_event_tests {
         let join = handle.spawn(async move {
             agent_session
                 .run_text("hello".to_string(), move |event| {
-                    events_capture.lock().unwrap().push(event);
+                    events_capture.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(event);
                 })
                 .await
                 .expect("run_text")
@@ -4231,7 +4231,7 @@ mod turn_event_tests {
             let message = join.await;
             assert_eq!(message.stop_reason, StopReason::Stop);
 
-            let events = events.lock().unwrap();
+            let events = events.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let turn_start_indices = events
                 .iter()
                 .enumerate()
@@ -4309,7 +4309,7 @@ mod turn_event_tests {
         let join = handle.spawn(async move {
             agent_session
                 .run_text("hello".to_string(), move |event| {
-                    events_capture.lock().expect("events lock").push(event);
+                    events_capture.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(event);
                 })
                 .await
                 .expect("run_text")
@@ -4319,7 +4319,7 @@ mod turn_event_tests {
             let message = join.await;
             assert_eq!(message.stop_reason, StopReason::Stop);
 
-            let events = events.lock().expect("events lock");
+            let events = events.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let turn_start_count = events
                 .iter()
                 .filter(|event| matches!(event, AgentEvent::TurnStart { .. }))

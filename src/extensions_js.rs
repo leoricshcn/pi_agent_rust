@@ -5770,19 +5770,36 @@ fn resolve_module_path(
     }
 
     if let Some(path) = specifier.strip_prefix("file://") {
-        let resolved = resolve_existing_file(PathBuf::from(path))?;
         if canonical_roots.is_empty() {
             return None;
         }
-        let canonical = crate::extensions::safe_canonicalize(&resolved);
+        let path_buf = PathBuf::from(path);
+        let canonical = crate::extensions::safe_canonicalize(&path_buf);
         let allowed = canonical_roots
             .iter()
             .any(|canonical_root| canonical.starts_with(canonical_root));
         if !allowed {
             tracing::warn!(
                 event = "pijs.resolve.monotonicity_violation",
-                resolved = %resolved.display(),
+                original = %path_buf.display(),
                 "resolution blocked: file:// path escapes extension root"
+            );
+            return None;
+        }
+        
+        let resolved = resolve_existing_file(path_buf)?;
+        
+        // Second check after resolution (in case of symlinks)
+        let canonical_resolved = crate::extensions::safe_canonicalize(&resolved);
+        let allowed_resolved = canonical_roots
+            .iter()
+            .any(|canonical_root| canonical_resolved.starts_with(canonical_root));
+            
+        if !allowed_resolved {
+            tracing::warn!(
+                event = "pijs.resolve.monotonicity_violation",
+                resolved = %resolved.display(),
+                "resolution blocked: resolved file:// path escapes extension root"
             );
             return None;
         }

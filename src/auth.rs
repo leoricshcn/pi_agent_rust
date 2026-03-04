@@ -155,6 +155,12 @@ pub struct AuthFile {
     pub entries: HashMap<String, AuthCredential>,
 }
 
+#[derive(Serialize)]
+struct AuthFileRef<'a> {
+    #[serde(flatten)]
+    entries: &'a HashMap<String, AuthCredential>,
+}
+
 /// Auth storage wrapper with file locking.
 #[derive(Debug, Clone)]
 pub struct AuthStorage {
@@ -212,10 +218,13 @@ impl AuthStorage {
             let parsed: AuthFile = match serde_json::from_str(&content) {
                 Ok(file) => file,
                 Err(e) => {
+                    let backup_path = path.with_extension("json.corrupt");
+                    let _ = fs::copy(&path, &backup_path);
                     tracing::warn!(
                         event = "pi.auth.parse_error",
                         error = %e,
-                        "auth.json is corrupted; starting with empty credentials"
+                        backup = %backup_path.display(),
+                        "auth.json is corrupted; backed up and starting with empty credentials"
                     );
                     AuthFile::default()
                 }
@@ -245,7 +254,34 @@ impl AuthStorage {
 
     /// Persist auth.json (atomic write + permissions).
     pub fn save(&self) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
+        let data = serde_json::to_string_pretty(&AuthFileRef {
+            entries: &self.entries,
+        })?;
+        Self::save_data_sync(&self.path, &data)
+    }
+
+    /// Persist auth.json asynchronously.
+    pub async fn save_async(&self) -> Result<()> {
+        let data = serde_json::to_string_pretty(&AuthFileRef {
+            entries: &self.entries,
+        })?;
+        let (tx, rx) = oneshot::channel();
+        let path = self.path.clone();
+
+        std::thread::spawn(move || {
+            let res = Self::save_data_sync(&path, &data);
+            let cx = AgentCx::for_request();
+            let _ = tx.send(cx.cx(), res);
+        });
+
+        let cx = AgentCx::for_request();
+        rx.recv(cx.cx())
+            .await
+            .map_err(|_| Error::auth("Save task cancelled".to_string()))?
+    }
+
+    fn save_data_sync(path: &Path, data: &str) -> Result<()> {
+        if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
 
@@ -258,12 +294,8 @@ impl AuthStorage {
             options.mode(0o600);
         }
 
-        let file = options.open(&self.path)?;
+        let file = options.open(path)?;
         let mut locked = lock_file(file, Duration::from_secs(30))?;
-
-        let data = serde_json::to_string_pretty(&AuthFile {
-            entries: self.entries.clone(),
-        })?;
 
         // Write to the locked file handle, not a new handle
         let f = locked.as_file_mut();
@@ -273,23 +305,6 @@ impl AuthStorage {
         f.flush()?;
 
         Ok(())
-    }
-
-    /// Persist auth.json asynchronously.
-    pub async fn save_async(&self) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        let this = self.clone();
-
-        std::thread::spawn(move || {
-            let res = this.save();
-            let cx = AgentCx::for_request();
-            let _ = tx.send(cx.cx(), res);
-        });
-
-        let cx = AgentCx::for_request();
-        rx.recv(cx.cx())
-            .await
-            .map_err(|_| Error::auth("Save task cancelled".to_string()))?
     }
 
     /// Get raw credential.
@@ -525,6 +540,7 @@ impl AuthStorage {
         }
 
         let mut failed_providers = Vec::new();
+        let mut needs_save = false;
 
         for (provider, access_token, refresh_token, stored_token_url, stored_client_id) in refreshes
         {
@@ -592,16 +608,19 @@ impl AuthStorage {
 
             match result {
                 Ok(refreshed) => {
-                    let name = provider.clone();
                     self.entries.insert(provider, refreshed);
-                    if let Err(e) = self.save_async().await {
-                        tracing::warn!("Failed to save auth.json after refreshing {name}: {e}");
-                    }
+                    needs_save = true;
                 }
                 Err(e) => {
                     tracing::warn!("Failed to refresh OAuth token for {provider}: {e}");
                     failed_providers.push(format!("{provider} ({e})"));
                 }
+            }
+        }
+
+        if needs_save {
+            if let Err(e) = self.save_async().await {
+                tracing::warn!("Failed to save auth.json after refreshing OAuth tokens: {e}");
             }
         }
 
@@ -672,6 +691,8 @@ impl AuthStorage {
             );
         }
         let mut failed_providers: Vec<String> = Vec::new();
+        let mut needs_save = false;
+
         for (provider, refresh_token, config) in refreshes {
             let start = std::time::Instant::now();
             match refresh_extension_oauth_token(client, &config, &refresh_token).await {
@@ -683,7 +704,7 @@ impl AuthStorage {
                         "Extension OAuth token refreshed"
                     );
                     self.entries.insert(provider, refreshed);
-                    self.save_async().await?;
+                    needs_save = true;
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -697,6 +718,13 @@ impl AuthStorage {
                 }
             }
         }
+
+        if needs_save {
+            if let Err(e) = self.save_async().await {
+                tracing::warn!("Failed to save auth.json after refreshing extension OAuth tokens: {e}");
+            }
+        }
+
         if failed_providers.is_empty() {
             Ok(())
         } else {
