@@ -654,35 +654,60 @@ where
     }
 
     fn end_tool_call(&mut self, item_id: &str, call_id: &str, name: &str, arguments: &str) {
-        let mut tc = self
-            .tool_calls_by_item_id
-            .remove(item_id)
-            .unwrap_or_else(|| {
-                // If we missed the added event, synthesize a content slot now.
-                let content_index = self.partial.content.len();
-                self.partial.content.push(ContentBlock::ToolCall(ToolCall {
-                    id: call_id.to_string(),
-                    name: name.to_string(),
-                    arguments: serde_json::Value::Null,
-                    thought_signature: None,
-                }));
-                ToolCallState {
-                    content_index,
-                    call_id: call_id.to_string(),
-                    name: name.to_string(),
-                    arguments: String::new(),
-                }
+        let (mut tc, synthesized_start) =
+            self.tool_calls_by_item_id
+                .remove(item_id)
+                .map_or_else(
+                    || {
+                        // If we missed the added event, synthesize the full tool-call block now
+                        // so downstream consumers still see a valid Start → Delta? → End sequence.
+                        let content_index = self.partial.content.len();
+                        self.partial.content.push(ContentBlock::ToolCall(ToolCall {
+                            id: call_id.to_string(),
+                            name: name.to_string(),
+                            arguments: serde_json::Value::Null,
+                            thought_signature: None,
+                        }));
+                        (
+                            ToolCallState {
+                                content_index,
+                                call_id: call_id.to_string(),
+                                name: name.to_string(),
+                                arguments: String::new(),
+                            },
+                            true,
+                        )
+                    },
+                    |state| (state, false),
+                );
+
+        if synthesized_start {
+            self.pending_events.push_back(StreamEvent::ToolCallStart {
+                content_index: tc.content_index,
             });
+        }
 
         // Prefer the final arguments field when present.
         if !arguments.is_empty() {
             tc.arguments = arguments.to_string();
         }
 
-        let parsed_args: serde_json::Value = serde_json::from_str(&tc.arguments).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, raw = %tc.arguments, "Failed to parse tool arguments as JSON");
-            serde_json::Value::Null
-        });
+        if synthesized_start && !tc.arguments.is_empty() {
+            self.pending_events.push_back(StreamEvent::ToolCallDelta {
+                content_index: tc.content_index,
+                delta: tc.arguments.clone(),
+            });
+        }
+
+        let parsed_args: serde_json::Value =
+            serde_json::from_str(&tc.arguments).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    raw = %tc.arguments,
+                    "Failed to parse tool arguments as JSON"
+                );
+                serde_json::Value::Null
+            });
 
         self.partial.stop_reason = StopReason::ToolUse;
         self.pending_events.push_back(StreamEvent::ToolCallEnd {
@@ -1325,6 +1350,69 @@ mod tests {
         assert_eq!(tool_end.id, "call_2");
         assert_eq!(tool_end.name, "search");
         assert_eq!(tool_end.arguments, json!({ "q": "rust" }));
+    }
+
+    #[test]
+    fn test_stream_synthesizes_tool_call_start_when_done_arrives_first() {
+        let events = vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_3",
+                    "call_id": "call_3",
+                    "name": "echo",
+                    "arguments": "{\"text\":\"late start\"}",
+                    "status": "completed"
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "incomplete_details": null,
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2
+                    }
+                }
+            }),
+        ];
+
+        let out = collect_events(&events);
+        let start_idx = out
+            .iter()
+            .position(|event| matches!(event, StreamEvent::ToolCallStart { .. }))
+            .expect("tool call start");
+        let delta_idx = out
+            .iter()
+            .position(|event| matches!(event, StreamEvent::ToolCallDelta { delta, .. } if delta == "{\"text\":\"late start\"}"))
+            .expect("tool call delta");
+        let end_idx = out
+            .iter()
+            .position(|event| matches!(event, StreamEvent::ToolCallEnd { .. }))
+            .expect("tool call end");
+
+        assert!(start_idx < delta_idx);
+        assert!(delta_idx < end_idx);
+
+        let tool_end = out
+            .iter()
+            .find_map(|event| match event {
+                StreamEvent::ToolCallEnd { tool_call, .. } => Some(tool_call),
+                _ => None,
+            })
+            .expect("tool call end");
+        assert_eq!(tool_end.id, "call_3");
+        assert_eq!(tool_end.name, "echo");
+        assert_eq!(tool_end.arguments, json!({ "text": "late start" }));
+        assert!(matches!(
+            out.last(),
+            Some(StreamEvent::Done {
+                reason: StopReason::ToolUse,
+                ..
+            })
+        ));
     }
 
     #[test]
