@@ -6362,9 +6362,15 @@ fn maybe_cjs_to_esm(source: &str) -> String {
         || source.contains("module[\"exports\"]")
         || source.contains("module['exports']");
     let has_exports_usage = source.contains("exports.") || source.contains("exports[");
-    let has_dirname_refs = source.contains("__dirname") || source.contains("__filename");
+    let has_filename_refs = source.contains("__filename");
+    let has_dirname_refs = source.contains("__dirname");
 
-    if !has_require && !has_module_exports && !has_exports_usage && !has_dirname_refs {
+    if !has_require
+        && !has_module_exports
+        && !has_exports_usage
+        && !has_filename_refs
+        && !has_dirname_refs
+    {
         return source.to_string();
     }
 
@@ -6378,13 +6384,19 @@ fn maybe_cjs_to_esm(source: &str) -> String {
     // Extract all require() specifiers
     let specifiers = extract_static_require_specifiers(source);
 
-    if specifiers.is_empty() && !has_module_exports && !has_exports_usage && !has_dirname_refs {
+    if specifiers.is_empty()
+        && !has_module_exports
+        && !has_exports_usage
+        && !has_filename_refs
+        && !has_dirname_refs
+    {
         return source.to_string();
     }
     if specifiers.is_empty()
         && has_esm
         && !has_module_exports
         && !has_exports_usage
+        && !has_filename_refs
         && !has_dirname_refs
     {
         return source.to_string();
@@ -6422,7 +6434,7 @@ fn maybe_cjs_to_esm(source: &str) -> String {
     let has_dirname_binding = source_declares_binding(source, "__dirname");
     let has_module_binding = source_declares_binding(source, "module");
     let has_exports_binding = source_declares_binding(source, "exports");
-    let needs_filename = has_dirname_refs && !has_filename_binding;
+    let needs_filename = has_filename_refs && !has_filename_binding;
     let needs_dirname = has_dirname_refs && !has_dirname_binding;
     let needs_module = (has_module_exports || has_exports_usage) && !has_module_binding;
     let needs_exports = (has_module_exports || has_exports_usage) && !has_exports_binding;
@@ -6438,7 +6450,12 @@ fn maybe_cjs_to_esm(source: &str) -> String {
         }
         if needs_dirname {
             output.push_str(
-                "const __dirname = __filename ? __filename.replace(/[/\\\\][^/\\\\]*$/, '') : '.';\n",
+                "const __dirname = (() => {\n\
+                 \x20 try {\n\
+                 \x20\x20 const __pi_pathname = new URL(import.meta.url).pathname || '';\n\
+                 \x20\x20 return __pi_pathname ? __pi_pathname.replace(/[/\\\\][^/\\\\]*$/, '') : '.';\n\
+                 \x20 } catch { return '.'; }\n\
+                 })();\n",
             );
         }
         if needs_module {
@@ -18393,6 +18410,44 @@ module.exports = { fs, generated };
     }
 
     #[test]
+    fn maybe_cjs_to_esm_leaves_doom_style_dirname_module_alone() {
+        let source = r#"
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+export const bundled = join(__dirname, "doom1.wad");
+"#;
+
+        let rewritten = maybe_cjs_to_esm(source);
+        assert!(
+            !rewritten.contains("const __filename ="),
+            "declared __dirname should not trigger __filename shim:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("const __dirname = (() =>"),
+            "declared __dirname should not be replaced:\n{rewritten}"
+        );
+    }
+
+    #[test]
+    fn maybe_cjs_to_esm_injects_dirname_without_filename_for_free_dirname() {
+        let source = r"
+export const currentDir = __dirname;
+";
+
+        let rewritten = maybe_cjs_to_esm(source);
+        assert!(
+            rewritten.contains("const __dirname = (() =>"),
+            "free __dirname should get a dirname shim:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("const __filename ="),
+            "free __dirname alone should not force a __filename shim:\n{rewritten}"
+        );
+    }
+
+    #[test]
     fn extract_import_names_handles_default_plus_named_imports() {
         let source = r#"
 import Ajv, {
@@ -19552,6 +19607,166 @@ export default ConfigLoader;
                     .any(|event| event.pattern == RepairPattern::MissingNpmDep),
                 "existing virtual module should suppress missing_npm_dep repair events"
             );
+        });
+    }
+
+    #[test]
+    fn pijs_dynamic_import_loads_doom_style_wad_finder_module() {
+        futures::executor::block_on(async {
+            let temp_dir = tempfile::tempdir().expect("tempdir");
+            let ext_dir = temp_dir.path().join("community").join("doom-like");
+            std::fs::create_dir_all(&ext_dir).expect("mkdir ext");
+            let entry = ext_dir.join("wad-finder.ts");
+            std::fs::write(
+                &entry,
+                r#"
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+globalThis.__doomWadFinderProbe = {
+  bundled: join(__dirname, "doom1.wad"),
+};
+
+export const bundled = globalThis.__doomWadFinderProbe.bundled;
+"#,
+            )
+            .expect("write extension module");
+
+            let config = PiJsRuntimeConfig {
+                repair_mode: RepairMode::AutoStrict,
+                ..PiJsRuntimeConfig::default()
+            };
+            let runtime = PiJsRuntime::with_clock_and_config_with_policy(
+                DeterministicClock::new(0),
+                config,
+                None,
+            )
+            .await
+            .expect("create runtime");
+            runtime.add_extension_root_with_id(ext_dir.clone(), Some("community/doom-like"));
+
+            let entry_spec = format!("file://{}", entry.display());
+            let script = format!(
+                r#"
+                globalThis.doomLikeImport = {{}};
+                import({entry_spec:?})
+                  .then(() => {{
+                    globalThis.doomLikeImport.done = true;
+                    globalThis.doomLikeImport.error = "";
+                  }})
+                  .catch((err) => {{
+                    globalThis.doomLikeImport.done = true;
+                    globalThis.doomLikeImport.error = String((err && err.message) || err || "");
+                  }});
+                "#
+            );
+            runtime.eval(&script).await.expect("eval import");
+
+            let result = get_global_json(&runtime, "doomLikeImport").await;
+            assert_eq!(result["done"], serde_json::json!(true));
+            assert_eq!(result["error"], serde_json::json!(""));
+
+            let probe = get_global_json(&runtime, "__doomWadFinderProbe").await;
+            let bundled = probe["bundled"].as_str().unwrap_or_default();
+            assert!(
+                bundled.ends_with("/doom1.wad"),
+                "unexpected doom wad probe: {probe}"
+            );
+        });
+    }
+
+    #[test]
+    fn pijs_dynamic_import_loads_real_doom_wad_finder_module() {
+        futures::executor::block_on(async {
+            let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let ext_dir = repo_root.join("tests/ext_conformance/artifacts/doom-overlay");
+            let entry = ext_dir.join("wad-finder.ts");
+            assert!(entry.is_file(), "missing doom wad-finder at {entry:?}");
+
+            let config = PiJsRuntimeConfig {
+                repair_mode: RepairMode::AutoStrict,
+                ..PiJsRuntimeConfig::default()
+            };
+            let runtime = PiJsRuntime::with_clock_and_config_with_policy(
+                DeterministicClock::new(0),
+                config,
+                None,
+            )
+            .await
+            .expect("create runtime");
+            runtime.add_extension_root_with_id(ext_dir.clone(), Some("community/doom-overlay"));
+
+            let entry_spec = format!("file://{}", entry.display());
+            let script = format!(
+                r#"
+                globalThis.realDoomWadFinderImport = {{}};
+                import({entry_spec:?})
+                  .then((mod) => {{
+                    globalThis.realDoomWadFinderImport.done = true;
+                    globalThis.realDoomWadFinderImport.error = "";
+                    globalThis.realDoomWadFinderImport.exportType = typeof mod.findWadFile;
+                  }})
+                  .catch((err) => {{
+                    globalThis.realDoomWadFinderImport.done = true;
+                    globalThis.realDoomWadFinderImport.error = String((err && err.message) || err || "");
+                  }});
+                "#
+            );
+            runtime.eval(&script).await.expect("eval import");
+
+            let result = get_global_json(&runtime, "realDoomWadFinderImport").await;
+            assert_eq!(result["done"], serde_json::json!(true));
+            assert_eq!(result["error"], serde_json::json!(""));
+            assert_eq!(result["exportType"], serde_json::json!("function"));
+        });
+    }
+
+    #[test]
+    fn pijs_loads_real_doom_extension_entry() {
+        futures::executor::block_on(async {
+            let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let ext_dir = repo_root.join("tests/ext_conformance/artifacts/doom-overlay");
+            let entry = ext_dir.join("index.ts");
+            assert!(entry.is_file(), "missing doom entry at {entry:?}");
+
+            let config = PiJsRuntimeConfig {
+                repair_mode: RepairMode::AutoStrict,
+                ..PiJsRuntimeConfig::default()
+            };
+            let runtime = PiJsRuntime::with_clock_and_config_with_policy(
+                DeterministicClock::new(0),
+                config,
+                None,
+            )
+            .await
+            .expect("create runtime");
+            runtime.add_extension_root_with_id(ext_dir.clone(), Some("community/doom-overlay"));
+
+            let entry_spec = format!("file://{}", entry.display());
+            let script = format!(
+                r#"
+                globalThis.realDoomEntryLoad = {{}};
+                __pi_load_extension("community/doom-overlay", {entry_spec:?}, {{ name: "doom-overlay" }})
+                  .then(() => {{
+                    globalThis.realDoomEntryLoad.done = true;
+                    globalThis.realDoomEntryLoad.error = "";
+                  }})
+                  .catch((err) => {{
+                    globalThis.realDoomEntryLoad.done = true;
+                    globalThis.realDoomEntryLoad.error = String((err && err.message) || err || "");
+                  }});
+                "#
+            );
+            runtime.eval(&script).await.expect("eval load_extension");
+
+            let result = get_global_json(&runtime, "realDoomEntryLoad").await;
+            assert_eq!(result["done"], serde_json::json!(true));
+            assert_eq!(result["error"], serde_json::json!(""));
+
+            let snapshot = call_global_fn_json(&runtime, "__pi_runtime_registry_snapshot").await;
+            assert_eq!(snapshot["extensions"], serde_json::json!(1));
+            assert_eq!(snapshot["commands"], serde_json::json!(1));
         });
     }
 
