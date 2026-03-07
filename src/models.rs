@@ -1079,7 +1079,7 @@ fn built_in_models(auth: &AuthStorage, mode: ModelRegistryLoadMode) -> Vec<Model
                 &mut provider_api_key_cache,
             ),
             headers: HashMap::new(),
-            auth_header: false,
+            auth_header: true,
             compat: None,
             oauth_config: None,
         });

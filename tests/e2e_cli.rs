@@ -2213,6 +2213,103 @@ fn build_anthropic_response_chunks(text: &str) -> Vec<String> {
     ]
 }
 
+fn build_anthropic_response_chunks_from_parts(text_parts: &[&str]) -> Vec<String> {
+    let message_start = json!({
+        "type": "message_start",
+        "message": {
+            "model": "claude-sonnet-4-5",
+            "id": "msg_mock_e2e_001",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 1,
+                "service_tier": "standard"
+            }
+        }
+    });
+    let content_start = json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "text", "text": ""}
+    });
+    let content_stop = json!({
+        "type": "content_block_stop",
+        "index": 0
+    });
+    let message_delta = json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+        "usage": {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": text_parts.len().max(1)
+        }
+    });
+
+    let mut chunks = vec![
+        format!("event: message_start\ndata: {message_start}\n\n"),
+        format!("event: content_block_start\ndata: {content_start}\n\n"),
+    ];
+
+    for (idx, text) in text_parts.iter().enumerate() {
+        if idx % 4 == 1 {
+            chunks.push("event: ping\ndata: {\"type\": \"ping\"}\n\n".to_string());
+        }
+        let content_delta = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": text}
+        });
+        chunks.push(format!(
+            "event: content_block_delta\ndata: {content_delta}\n\n"
+        ));
+    }
+
+    chunks.push(format!(
+        "event: content_block_stop\ndata: {content_stop}\n\n"
+    ));
+    chunks.push(format!("event: message_delta\ndata: {message_delta}\n\n"));
+    chunks.push("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_string());
+    chunks
+}
+
+fn split_ascii_chunks(chunks: &[String], fragment_sizes: &[usize]) -> Vec<String> {
+    assert!(
+        !fragment_sizes.is_empty(),
+        "fragment_sizes must contain at least one size"
+    );
+    assert!(
+        fragment_sizes.iter().all(|size| *size > 0),
+        "fragment_sizes must be positive"
+    );
+
+    let joined = chunks.concat();
+    assert!(
+        joined.is_ascii(),
+        "test-only chunk fragmentation currently expects ASCII payloads"
+    );
+
+    let bytes = joined.as_bytes();
+    let mut offset = 0usize;
+    let mut idx = 0usize;
+    let mut fragments = Vec::new();
+    while offset < bytes.len() {
+        let size = fragment_sizes[idx % fragment_sizes.len()];
+        let end = (offset + size).min(bytes.len());
+        fragments.push(joined[offset..end].to_string());
+        offset = end;
+        idx += 1;
+    }
+    fragments
+}
+
 /// Create a VCR cassette file and configure the harness for VCR playback.
 ///
 /// Writes a cassette JSON to a temp directory, then sets the `VCR_MODE`,
@@ -2225,10 +2322,18 @@ fn setup_vcr_anthropic(
     request_body: &serde_json::Value,
     response_text: &str,
 ) {
+    let chunks = build_anthropic_response_chunks(response_text);
+    setup_vcr_anthropic_with_chunks(harness, cassette_name, request_body, &chunks);
+}
+
+fn setup_vcr_anthropic_with_chunks(
+    harness: &mut CliTestHarness,
+    cassette_name: &str,
+    request_body: &serde_json::Value,
+    chunks: &[String],
+) {
     let cassette_dir = harness.harness.temp_path("vcr-cassettes");
     fs::create_dir_all(&cassette_dir).expect("create cassette dir");
-
-    let chunks = build_anthropic_response_chunks(response_text);
     let cassette = json!({
         "version": "1.0",
         "test_name": cassette_name,
@@ -2491,6 +2596,23 @@ fn parse_json_mode_stdout_lines(stdout: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn collect_json_mode_text_deltas(lines: &[serde_json::Value]) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|value| value["type"] == "message_update")
+        .filter_map(|value| {
+            let event = value.get("assistantMessageEvent")?;
+            if event.get("type").and_then(serde_json::Value::as_str) != Some("text_delta") {
+                return None;
+            }
+            event
+                .get("delta")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_lines)]
 fn assert_json_mode_lifecycle_shape(lines: &[serde_json::Value]) {
     assert!(
@@ -2688,6 +2810,121 @@ fn e2e_cli_json_mode_print_flag_emits_header_and_events() {
 
     let lines = parse_json_mode_stdout_lines(&result.stdout);
     assert_json_mode_lifecycle_shape(&lines);
+}
+
+#[test]
+fn e2e_cli_json_mode_fragmented_sse_chunks_preserve_delta_text() {
+    let mut harness =
+        CliTestHarness::new("e2e_cli_json_mode_fragmented_sse_chunks_preserve_delta_text");
+
+    let response_parts = vec![
+        "seg-00|", "seg-01|", "seg-02|", "seg-03|", "seg-04|", "seg-05|", "seg-06|", "seg-07|",
+        "seg-08|", "seg-09|", "seg-10|", "seg-11|",
+    ];
+    let expected_text = response_parts.concat();
+    let request_body = json!({
+        "model": "claude-sonnet-4-5",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Handle fragmented SSE frames."}]}
+        ],
+        "system": expected_system_prompt("JSON mode fragmented SSE test."),
+        "max_tokens": 8192,
+        "stream": true
+    });
+    let chunks = build_anthropic_response_chunks_from_parts(&response_parts);
+    let fragmented = split_ascii_chunks(&chunks, &[1, 2, 5, 3, 8, 13, 21]);
+    setup_vcr_anthropic_with_chunks(
+        &mut harness,
+        "e2e_json_mode_fragmented_sse_chunks",
+        &request_body,
+        &fragmented,
+    );
+
+    let mut args: Vec<&str> = vec![
+        "--mode",
+        "json",
+        "-p",
+        "--provider",
+        "anthropic",
+        "--model",
+        "claude-sonnet-4-5",
+    ];
+    args.extend_from_slice(PRINT_MODE_ISOLATION_FLAGS);
+    args.extend_from_slice(&[
+        "--system-prompt",
+        "JSON mode fragmented SSE test.",
+        "Handle fragmented SSE frames.",
+    ]);
+
+    let result = harness.run(&args);
+    assert_exit_code(&harness.harness, &result, 0);
+
+    let lines = parse_json_mode_stdout_lines(&result.stdout);
+    assert_json_mode_lifecycle_shape(&lines);
+    let deltas = collect_json_mode_text_deltas(&lines);
+    assert_eq!(deltas, response_parts);
+    assert_eq!(deltas.concat(), expected_text);
+}
+
+#[test]
+fn e2e_cli_json_mode_high_volume_stream_preserves_event_count_and_order() {
+    let mut harness =
+        CliTestHarness::new("e2e_cli_json_mode_high_volume_stream_preserves_event_count_and_order");
+
+    let response_parts = (0..128)
+        .map(|idx| format!("chunk-{idx:03}|"))
+        .collect::<Vec<_>>();
+    let expected_text = response_parts.concat();
+    let part_refs = response_parts
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let request_body = json!({
+        "model": "claude-sonnet-4-5",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Stream a lot of tiny JSON mode deltas."}]}
+        ],
+        "system": expected_system_prompt("JSON mode throughput regression test."),
+        "max_tokens": 8192,
+        "stream": true
+    });
+    let chunks = build_anthropic_response_chunks_from_parts(&part_refs);
+    setup_vcr_anthropic_with_chunks(
+        &mut harness,
+        "e2e_json_mode_high_volume_stream",
+        &request_body,
+        &chunks,
+    );
+
+    let mut args: Vec<&str> = vec![
+        "--mode",
+        "json",
+        "-p",
+        "--provider",
+        "anthropic",
+        "--model",
+        "claude-sonnet-4-5",
+    ];
+    args.extend_from_slice(PRINT_MODE_ISOLATION_FLAGS);
+    args.extend_from_slice(&[
+        "--system-prompt",
+        "JSON mode throughput regression test.",
+        "Stream a lot of tiny JSON mode deltas.",
+    ]);
+
+    let result = harness.run(&args);
+    assert_exit_code(&harness.harness, &result, 0);
+
+    let lines = parse_json_mode_stdout_lines(&result.stdout);
+    assert_json_mode_lifecycle_shape(&lines);
+    let deltas = collect_json_mode_text_deltas(&lines);
+    assert_eq!(
+        deltas.len(),
+        response_parts.len(),
+        "high-volume JSON mode should emit one text_delta per SSE delta"
+    );
+    assert_eq!(deltas, response_parts);
+    assert_eq!(deltas.concat(), expected_text);
 }
 
 #[test]

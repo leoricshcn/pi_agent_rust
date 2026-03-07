@@ -1605,6 +1605,101 @@ mod tests {
     }
 
     #[test]
+    fn test_stream_fragmented_sse_transport_preserves_text_delta_order() {
+        let response_parts = vec![
+            "seg-00|".to_string(),
+            "seg-01|".to_string(),
+            "seg-02|".to_string(),
+            "seg-03|".to_string(),
+            "seg-04|".to_string(),
+            "seg-05|".to_string(),
+            "seg-06|".to_string(),
+            "seg-07|".to_string(),
+            "seg-08|".to_string(),
+            "seg-09|".to_string(),
+            "seg-10|".to_string(),
+            "seg-11|".to_string(),
+        ];
+        let expected_text = response_parts.concat();
+        let part_refs = response_parts
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let frames = build_text_stream_sse_frames(&part_refs);
+        let chunks = split_ascii_stream_bytes(&frames, &[1, 2, 5, 3, 8, 13, 21]);
+        let out = collect_events_from_byte_chunks(chunks);
+
+        assert!(matches!(out.first(), Some(StreamEvent::Start { .. })));
+        assert!(matches!(
+            out.get(1),
+            Some(StreamEvent::TextStart {
+                content_index: 0,
+                ..
+            })
+        ));
+
+        let deltas = collect_text_deltas(&out);
+        assert_eq!(deltas, response_parts);
+        assert_eq!(deltas.concat(), expected_text);
+
+        let final_text = out
+            .iter()
+            .find_map(|event| match event {
+                StreamEvent::TextEnd { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .expect("text_end event");
+        assert_eq!(final_text, expected_text);
+
+        let done_count = out
+            .iter()
+            .filter(|event| matches!(event, StreamEvent::Done { .. }))
+            .count();
+        assert_eq!(done_count, 1, "expected exactly one Done event");
+
+        match out.last() {
+            Some(StreamEvent::Done { reason, message }) => {
+                assert_eq!(*reason, StopReason::Stop);
+                assert_eq!(message.stop_reason, StopReason::Stop);
+            }
+            other => panic!("expected final Done event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_stream_high_volume_fragmented_sse_preserves_delta_count_and_content() {
+        let response_parts = (0..128)
+            .map(|idx| format!("chunk-{idx:03}|"))
+            .collect::<Vec<_>>();
+        let expected_text = response_parts.concat();
+        let part_refs = response_parts
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let frames = build_text_stream_sse_frames(&part_refs);
+        let chunks = split_ascii_stream_bytes(&frames, &[1, 1, 2, 3, 5, 8, 13, 21, 34]);
+        let out = collect_events_from_byte_chunks(chunks);
+        let deltas = collect_text_deltas(&out);
+
+        assert_eq!(
+            deltas.len(),
+            response_parts.len(),
+            "expected one TextDelta per text fragment"
+        );
+        assert_eq!(deltas, response_parts);
+        assert_eq!(deltas.concat(), expected_text);
+
+        let final_text = out
+            .iter()
+            .find_map(|event| match event {
+                StreamEvent::TextEnd { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .expect("text_end event");
+        assert_eq!(final_text, expected_text);
+    }
+
+    #[test]
     fn test_stream_sets_required_headers() {
         let captured = run_stream_and_capture_headers(CacheRetention::None)
             .expect("captured request for required headers");
@@ -2043,6 +2138,129 @@ mod tests {
 
             out
         })
+    }
+
+    fn collect_events_from_byte_chunks(chunks: Vec<Vec<u8>>) -> Vec<StreamEvent> {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+        runtime.block_on(async move {
+            let byte_stream = stream::iter(chunks.into_iter().map(Ok));
+            let event_source = crate::sse::SseStream::new(Box::pin(byte_stream));
+            let mut state = StreamState::new(
+                event_source,
+                "claude-test".to_string(),
+                "anthropic-messages".to_string(),
+                "anthropic".to_string(),
+            );
+            let mut out = Vec::new();
+
+            while let Some(item) = state.event_source.next().await {
+                let msg = item.expect("SSE event");
+                if msg.event == "ping" {
+                    continue;
+                }
+                if let Some(event) = state.process_event(&msg.data).expect("process_event") {
+                    out.push(event);
+                }
+            }
+
+            out
+        })
+    }
+
+    fn build_text_stream_sse_frames(text_parts: &[&str]) -> Vec<String> {
+        let message_start = json!({
+            "type": "message_start",
+            "message": {
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 1
+                }
+            }
+        });
+        let content_start = json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": { "type": "text" }
+        });
+        let content_stop = json!({
+            "type": "content_block_stop",
+            "index": 0
+        });
+        let message_delta = json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": { "output_tokens": text_parts.len().max(1) }
+        });
+
+        let mut frames = vec![
+            format!("event: message_start\ndata: {message_start}\n\n"),
+            format!("event: content_block_start\ndata: {content_start}\n\n"),
+        ];
+
+        for (idx, text) in text_parts.iter().enumerate() {
+            if idx % 4 == 1 {
+                frames.push("event: ping\ndata: {\"type\":\"ping\"}\n\n".to_string());
+            }
+            let content_delta = json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "text_delta", "text": text }
+            });
+            frames.push(format!(
+                "event: content_block_delta\ndata: {content_delta}\n\n"
+            ));
+        }
+
+        frames.push(format!(
+            "event: content_block_stop\ndata: {content_stop}\n\n"
+        ));
+        frames.push(format!("event: message_delta\ndata: {message_delta}\n\n"));
+        frames.push("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_string());
+        frames
+    }
+
+    fn split_ascii_stream_bytes(frames: &[String], fragment_sizes: &[usize]) -> Vec<Vec<u8>> {
+        assert!(
+            !fragment_sizes.is_empty(),
+            "fragment_sizes must contain at least one size"
+        );
+        assert!(
+            fragment_sizes.iter().all(|size| *size > 0),
+            "fragment_sizes must be positive"
+        );
+
+        let joined = frames.concat();
+        assert!(
+            joined.is_ascii(),
+            "test-only chunk fragmentation expects ASCII SSE fixtures"
+        );
+
+        let bytes = joined.as_bytes();
+        let mut offset = 0usize;
+        let mut idx = 0usize;
+        let mut chunks = Vec::new();
+        while offset < bytes.len() {
+            let size = fragment_sizes[idx % fragment_sizes.len()];
+            let end = (offset + size).min(bytes.len());
+            chunks.push(bytes[offset..end].to_vec());
+            offset = end;
+            idx += 1;
+        }
+        chunks
+    }
+
+    fn collect_text_deltas(events: &[StreamEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::TextDelta { delta, .. } => Some(delta.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn summarize_event(event: &StreamEvent) -> EventSummary {

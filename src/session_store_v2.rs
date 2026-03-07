@@ -1416,6 +1416,7 @@ fn is_recoverable_index_error(error: &Error) -> bool {
                 || lower.contains("payload integrity mismatch")
                 || lower.contains("entry sequence is not strictly increasing")
                 || lower.contains("index byte range overflow")
+                || lower.contains("failed to stat active segment")
         }
         _ => false,
     }
