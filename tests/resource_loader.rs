@@ -463,6 +463,7 @@ fn resolved_paths_feed_skill_and_prompt_loaders_with_collision_diagnostics() {
 
     let manager = PackageManager::new(cwd.clone());
     let roots = ResolveRoots {
+        project_settings_enabled: true,
         global_settings_path: global_base_dir.join("settings.json"),
         project_settings_path: project_base_dir.join("settings.json"),
         global_base_dir: global_base_dir.clone(),
