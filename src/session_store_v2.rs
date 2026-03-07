@@ -1312,6 +1312,7 @@ impl SessionStoreV2 {
             }
         }
 
+        validate_parent_graph_links(&parent_by_entry)?;
         validate_parent_graph_acyclic(&parent_by_entry)?;
 
         Ok(())
@@ -1426,6 +1427,22 @@ fn is_recoverable_index_error(error: &Error) -> bool {
 enum ParentGraphVisitState {
     Visiting,
     Visited,
+}
+
+fn validate_parent_graph_links(
+    parent_by_entry: &std::collections::HashMap<String, Option<String>>,
+) -> Result<()> {
+    for (entry_id, parent_id) in parent_by_entry {
+        if let Some(parent_id) = parent_id.as_deref()
+            && !parent_by_entry.contains_key(parent_id)
+        {
+            return Err(Error::session(format!(
+                "missing parent entry detected in session store: entry_id={entry_id} parent_id={parent_id}"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_parent_graph_acyclic(

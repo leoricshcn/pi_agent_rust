@@ -536,6 +536,33 @@ fn validate_integrity_rejects_cyclic_parent_chain() -> PiResult<()> {
 }
 
 #[test]
+fn validate_integrity_rejects_missing_parent_reference() -> PiResult<()> {
+    let dir = tempdir()?;
+    let mut store = SessionStoreV2::create(dir.path(), 4 * 1024)?;
+    store.append_entry("A", None, "message", json!({"v":"A"}))?;
+    store.append_entry("B", Some("A".to_string()), "message", json!({"v":"B"}))?;
+
+    let segment_path = store.segment_file_path(1);
+    let mut frames = store.read_segment(1)?;
+    assert_eq!(frames.len(), 2);
+    frames[1].parent_entry_id = Some("Z".to_string());
+
+    let mut encoded = String::new();
+    for frame in frames {
+        encoded.push_str(&serde_json::to_string(&frame)?);
+        encoded.push('\n');
+    }
+    fs::write(&segment_path, encoded)?;
+    store.rebuild_index()?;
+
+    let err = store
+        .validate_integrity()
+        .expect_err("dangling parent references must fail integrity validation");
+    assert!(err.to_string().contains("missing parent entry detected"));
+    Ok(())
+}
+
+#[test]
 fn frame_to_session_entry_roundtrip() -> PiResult<()> {
     let dir = tempdir()?;
     let mut store = SessionStoreV2::create(dir.path(), 4 * 1024)?;
