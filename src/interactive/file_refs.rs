@@ -125,15 +125,26 @@ pub(super) fn format_file_ref(path: &str) -> String {
 
     if needs_quotes {
         if !path.contains('"') {
-            format!("@\"{path}\"")
+            format!("@\"{}\"", escape_quoted_file_ref(path, '"'))
         } else if !path.contains('\'') {
-            format!("@'{path}'")
+            format!("@'{}'", escape_quoted_file_ref(path, '\''))
         } else {
-            format!("@\"{}\"", path.replace('"', "\\\""))
+            format!("@\"{}\"", escape_quoted_file_ref(path, '"'))
         }
     } else {
         format!("@{path}")
     }
+}
+
+fn escape_quoted_file_ref(path: &str, quote: char) -> String {
+    let mut escaped = String::with_capacity(path.len());
+    for ch in path.chars() {
+        if ch == '\\' || ch == quote {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 pub(super) fn split_trailing_punct(token: &str) -> (&str, &str) {
@@ -293,6 +304,25 @@ mod tests {
         assert_eq!(
             format_file_ref("it's a \"file\" name.rs"),
             "@\"it's a \\\"file\\\" name.rs\""
+        );
+    }
+
+    #[test]
+    fn format_file_ref_escapes_backslashes_in_quoted_paths() {
+        assert_eq!(
+            format_file_ref("C:\\Program Files\\Pi\\"),
+            "@\"C:\\\\Program Files\\\\Pi\\\\\""
+        );
+    }
+
+    #[test]
+    fn quoted_file_ref_formatter_round_trips_repeated_and_trailing_backslashes() {
+        let path = "\\\\server\\share name\\";
+        let formatted = format_file_ref(path);
+        let parsed = parse_quoted_file_ref(&formatted, 1);
+        assert_eq!(
+            parsed,
+            Some((path.to_string(), String::new(), formatted.len()))
         );
     }
 
