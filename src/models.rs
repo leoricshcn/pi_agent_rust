@@ -2518,6 +2518,65 @@ mod tests {
         assert_eq!(acme.model.input, vec![InputType::Text, InputType::Image]);
     }
 
+    #[test]
+    fn model_registry_load_resolves_relative_file_values_against_models_json_dir() {
+        let (dir, auth) = test_auth_storage();
+        let models_dir = dir.path().join("config");
+        std::fs::create_dir_all(&models_dir).expect("create models dir");
+        let models_path = models_dir.join("models.json");
+        std::fs::write(models_dir.join("relative_key.txt"), "relative-api-key\n")
+            .expect("write relative key");
+        std::fs::write(
+            models_dir.join("provider_header.txt"),
+            "provider-from-file\n",
+        )
+        .expect("write provider header");
+        std::fs::write(models_dir.join("model_header.txt"), "model-from-file\n")
+            .expect("write model header");
+
+        let models_json = serde_json::json!({
+            "providers": {
+                "acme-relative": {
+                    "baseUrl": "https://acme.example/v1",
+                    "api": "openai-completions",
+                    "apiKey": "file:relative_key.txt",
+                    "headers": {
+                        "x-provider-file": "file:provider_header.txt"
+                    },
+                    "models": [
+                        {
+                            "id": "acme-relative-chat",
+                            "headers": {
+                                "x-model-file": "file:model_header.txt"
+                            }
+                        }
+                    ]
+                }
+            }
+        });
+
+        std::fs::write(
+            &models_path,
+            serde_json::to_string_pretty(&models_json).expect("serialize models json"),
+        )
+        .expect("write models.json");
+
+        let registry = ModelRegistry::load(&auth, Some(models_path));
+        let acme = registry
+            .find("acme-relative", "acme-relative-chat")
+            .expect("custom model should load with relative file-backed values");
+
+        assert_eq!(acme.api_key.as_deref(), Some("relative-api-key"));
+        assert_eq!(
+            acme.headers.get("x-provider-file").map(String::as_str),
+            Some("provider-from-file")
+        );
+        assert_eq!(
+            acme.headers.get("x-model-file").map(String::as_str),
+            Some("model-from-file")
+        );
+    }
+
     // ─── supports_xhigh ──────────────────────────────────────────────
 
     fn make_model_entry(id: &str, reasoning: bool) -> ModelEntry {
@@ -3025,6 +3084,20 @@ mod tests {
     #[test]
     fn resolve_value_file_missing_returns_none() {
         assert!(resolve_value("file:/nonexistent/path/key.txt").is_none());
+    }
+
+    #[test]
+    fn resolve_value_file_relative_to_base_dir() {
+        let dir = tempdir().expect("tempdir");
+        let nested = dir.path().join("config");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+        let key_path = nested.join("relative-key.txt");
+        std::fs::write(&key_path, "relative-value\n").expect("write relative key");
+
+        assert_eq!(
+            resolve_value_with_base("file:relative-key.txt", Some(&nested)).as_deref(),
+            Some("relative-value")
+        );
     }
 
     #[test]
