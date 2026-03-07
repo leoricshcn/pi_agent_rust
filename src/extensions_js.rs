@@ -18271,12 +18271,12 @@ if (typeof globalThis.fetch !== 'function') {
     if (typeof globalThis.AbortController === 'undefined') {
         class AbortSignal {
             constructor() { this.aborted = false; this._listeners = []; }
-            get reason() { return this.aborted ? new Error('This operation was aborted') : undefined; }
+            get reason() { return this.aborted ? (this._reason !== undefined ? this._reason : new Error('This operation was aborted')) : undefined; }
             addEventListener(type, fn) { if (type === 'abort') this._listeners.push(fn); }
             removeEventListener(type, fn) { if (type === 'abort') this._listeners = this._listeners.filter(f => f !== fn); }
             throwIfAborted() { if (this.aborted) throw this.reason; }
-            static abort(reason) { const s = new AbortSignal(); s.aborted = true; s._reason = reason; return s; }
-            static timeout(ms) { const s = new AbortSignal(); setTimeout(() => { s.aborted = true; s._listeners.forEach(fn => fn()); }, ms); return s; }
+            static abort(reason) { const s = new AbortSignal(); s.aborted = true; s._reason = reason !== undefined ? reason : new Error('This operation was aborted'); return s; }
+            static timeout(ms) { const s = new AbortSignal(); setTimeout(() => { s.aborted = true; s._reason = new Error('The operation was aborted due to timeout'); s._listeners.forEach(fn => fn()); }, ms); return s; }
         }
         class AbortController {
             constructor() { this.signal = new AbortSignal(); }
