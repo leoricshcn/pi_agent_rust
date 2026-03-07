@@ -305,6 +305,28 @@ fn index_of_string() {
 }
 
 #[test]
+fn index_of_negative_offset_matches_node() {
+    let result = eval_buffer(
+        r#"(() => {
+        const buf = Buffer.from("abc");
+        return [buf.indexOf("a", -1), buf.indexOf("c", -1), buf.indexOf(97, -1)].join(",");
+    })()"#,
+    );
+    assert_eq!(result, "-1,2,-1");
+}
+
+#[test]
+fn index_of_string_encoding_overload() {
+    let result = eval_buffer(
+        r#"(() => {
+        const buf = Buffer.from("hello");
+        return [buf.indexOf("6c6c", "hex"), buf.includes("6c6c", "hex")].join(",");
+    })()"#,
+    );
+    assert_eq!(result, "2,true");
+}
+
+#[test]
 fn includes_true() {
     let result = eval_buffer(r#"Buffer.from("hello world").includes("world")"#);
     assert_eq!(result, "true");
@@ -314,6 +336,17 @@ fn includes_true() {
 fn includes_false() {
     let result = eval_buffer(r#"Buffer.from("hello").includes("xyz")"#);
     assert_eq!(result, "false");
+}
+
+#[test]
+fn includes_negative_offset_matches_node() {
+    let result = eval_buffer(
+        r#"(() => {
+        const buf = Buffer.from("abc");
+        return [buf.includes("a", -1), buf.includes("c", -1)].join(",");
+    })()"#,
+    );
+    assert_eq!(result, "false,true");
 }
 
 // ─── buf.fill ──────────────────────────────────────────────────────────────

@@ -17277,6 +17277,17 @@ if (typeof globalThis.URL === 'undefined') {
 
 if (typeof globalThis.Buffer === 'undefined') {
     class Buffer extends Uint8Array {
+        static _normalizeSearchOffset(length, byteOffset) {
+            if (byteOffset == null) return 0;
+            const number = Number(byteOffset);
+            if (Number.isNaN(number)) return 0;
+            if (number === Infinity) return length;
+            if (number === -Infinity) return 0;
+            const offset = Math.trunc(number);
+            if (offset < 0) return Math.max(length + offset, 0);
+            if (offset > length) return length;
+            return offset;
+        }
         static from(input, encoding) {
             if (typeof input === 'string') {
                 const enc = String(encoding || '').toLowerCase();
@@ -17403,14 +17414,20 @@ if (typeof globalThis.Buffer === 'undefined') {
             return buf;
         }
         indexOf(value, byteOffset, encoding) {
-            const offset = byteOffset || 0;
+            let offset = Buffer._normalizeSearchOffset(this.length, byteOffset);
+            let searchEncoding = encoding;
+            if (typeof byteOffset === 'string') {
+                offset = 0;
+                searchEncoding = byteOffset;
+            }
             if (typeof value === 'number') {
                 for (let i = offset; i < this.length; i++) {
                     if (this[i] === (value & 0xff)) return i;
                 }
                 return -1;
             }
-            const needle = typeof value === 'string' ? Buffer.from(value, encoding) : value;
+            const needle = typeof value === 'string' ? Buffer.from(value, searchEncoding) : value;
+            if (needle.length === 0) return offset;
             outer: for (let i = offset; i <= this.length - needle.length; i++) {
                 for (let j = 0; j < needle.length; j++) {
                     if (this[i + j] !== needle[j]) continue outer;
@@ -24392,6 +24409,11 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                         globalThis.bufResult.indexOf = b.indexOf('World');
                         globalThis.bufResult.includes = b.includes('World');
                         globalThis.bufResult.notIncludes = b.includes('xyz');
+                        const neg = B.from('abc');
+                        globalThis.bufResult.negativeMiss = neg.indexOf('a', -1);
+                        globalThis.bufResult.negativeHit = neg.indexOf('c', -1);
+                        globalThis.bufResult.negativeIncludes = neg.includes('a', -1);
+                        globalThis.bufResult.indexOfHexNeedle = B.from('hello').indexOf('6c6c', 'hex');
 
                         const sliced = b.slice(0, 5);
                         globalThis.bufResult.slice = sliced.toString();
@@ -24462,6 +24484,10 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert_eq!(r["indexOf"].as_f64(), Some(6.0));
             assert_eq!(r["includes"], serde_json::json!(true));
             assert_eq!(r["notIncludes"], serde_json::json!(false));
+            assert_eq!(r["negativeMiss"].as_f64(), Some(-1.0));
+            assert_eq!(r["negativeHit"].as_f64(), Some(2.0));
+            assert_eq!(r["negativeIncludes"], serde_json::json!(false));
+            assert_eq!(r["indexOfHexNeedle"].as_f64(), Some(2.0));
             // slice
             assert_eq!(r["slice"], serde_json::json!("Hello"));
             // toJSON

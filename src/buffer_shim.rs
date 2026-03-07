@@ -98,6 +98,18 @@ function decodeBytes(bytes, encoding, start, end) {
   }
 }
 
+function normalizeSearchOffset(length, byteOffset) {
+  if (byteOffset == null) return 0;
+  const number = Number(byteOffset);
+  if (Number.isNaN(number)) return 0;
+  if (number === Infinity) return length;
+  if (number === -Infinity) return 0;
+  const offset = Math.trunc(number);
+  if (offset < 0) return Math.max(length + offset, 0);
+  if (offset > length) return length;
+  return offset;
+}
+
 // ─── Buffer class ────────────────────────────────────────────────────────────
 
 class Buffer extends Uint8Array {
@@ -245,20 +257,24 @@ class Buffer extends Uint8Array {
   }
 
   indexOf(value, byteOffset, encoding) {
+    let offset = normalizeSearchOffset(this.length, byteOffset);
+    let searchEncoding = encoding;
+    if (typeof byteOffset === 'string') {
+      offset = 0;
+      searchEncoding = byteOffset;
+    }
     if (typeof value === 'number') {
-      byteOffset = byteOffset || 0;
-      for (let i = byteOffset; i < this.length; i++) {
+      for (let i = offset; i < this.length; i++) {
         if (this[i] === (value & 0xFF)) return i;
       }
       return -1;
     }
     if (typeof value === 'string') {
-      value = Buffer.from(value, encoding);
+      value = Buffer.from(value, searchEncoding);
     }
     if (value instanceof Uint8Array) {
-      byteOffset = byteOffset || 0;
-      if (value.length === 0) return byteOffset <= this.length ? byteOffset : -1;
-      outer: for (let i = byteOffset; i <= this.length - value.length; i++) {
+      if (value.length === 0) return offset;
+      outer: for (let i = offset; i <= this.length - value.length; i++) {
         for (let j = 0; j < value.length; j++) {
           if (this[i + j] !== value[j]) continue outer;
         }

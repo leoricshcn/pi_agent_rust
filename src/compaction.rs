@@ -177,7 +177,7 @@ fn extract_file_ops_from_message(
             "write" => {
                 file_ops.written.insert(path.to_string());
             }
-            "edit" => {
+            "edit" | "hashline_edit" => {
                 file_ops.edited.insert(path.to_string());
             }
             _ => {}
