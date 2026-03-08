@@ -5,13 +5,13 @@ use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -356,26 +356,24 @@ fn execute_cases(
         for _ in 0..jobs {
             let tx = tx.clone();
             let next_index = Arc::clone(&next_index);
-            scope.spawn(move || {
-                loop {
-                    let index = next_index.fetch_add(1, Ordering::Relaxed);
-                    if index >= total {
-                        break;
-                    }
-                    let entry = &selected[index];
-                    let result = run_one_case(
-                        entry,
-                        args,
-                        project_root,
-                        artifacts_root,
-                        pi_bin,
-                        per_case_dir,
-                    )
-                    .with_context(|| format!("running extension case '{}'", entry.id))
-                    .map(|case| (index, case));
-                    if tx.send(result).is_err() {
-                        break;
-                    }
+            scope.spawn(move || loop {
+                let index = next_index.fetch_add(1, Ordering::Relaxed);
+                if index >= total {
+                    break;
+                }
+                let entry = &selected[index];
+                let result = run_one_case(
+                    entry,
+                    args,
+                    project_root,
+                    artifacts_root,
+                    pi_bin,
+                    per_case_dir,
+                )
+                .with_context(|| format!("running extension case '{}'", entry.id))
+                .map(|case| (index, case));
+                if tx.send(result).is_err() {
+                    break;
                 }
             });
         }
@@ -591,7 +589,7 @@ fn execute_case_command(
     }
     command.env("HOME", &home_dir);
     command.env("PI_CODING_AGENT_DIR", env_root.join("agent"));
-    command.env("PI_CONFIG_PATH", env_root.join("config.toml"));
+    command.env("PI_CONFIG_PATH", isolated_settings_path(env_root));
     command.env("PI_SESSIONS_DIR", env_root.join("sessions"));
     command.env("PI_PACKAGE_DIR", env_root.join("packages"));
     command.env("PI_TEST_MODE", "1");
@@ -807,6 +805,10 @@ fn preview(text: &str) -> String {
     output
 }
 
+fn isolated_settings_path(env_root: &Path) -> PathBuf {
+    env_root.join("settings.json")
+}
+
 fn sanitize_id(id: &str) -> String {
     id.chars()
         .map(|ch| {
@@ -884,6 +886,15 @@ mod tests {
         let output = preview(&input);
         assert!(output.ends_with('…'));
         assert!(output.len() < input.len());
+    }
+
+    #[test]
+    fn isolated_settings_path_uses_settings_json_override() {
+        let env_root = PathBuf::from("/tmp/ext-release-run");
+        assert_eq!(
+            isolated_settings_path(&env_root),
+            env_root.join("settings.json")
+        );
     }
 
     #[test]
