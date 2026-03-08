@@ -7,6 +7,7 @@
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -93,6 +94,14 @@ impl PermissionStore {
                     path.display()
                 ))
             })?;
+            if file.version != CURRENT_VERSION {
+                return Err(Error::config(format!(
+                    "Unsupported permissions file schema version {} in {} (expected {})",
+                    file.version,
+                    path.display(),
+                    CURRENT_VERSION
+                )));
+            }
             // Convert Vec<PersistedDecision> → HashMap keyed by capability.
             file.decisions
                 .into_iter()
@@ -122,12 +131,8 @@ impl PermissionStore {
         let by_cap = self.decisions.get(extension_id)?;
         let dec = by_cap.get(capability)?;
 
-        // Check expiry.
-        if let Some(ref exp) = dec.expires_at {
-            let now = now_iso8601();
-            if now > *exp {
-                return None;
-            }
+        if !decision_is_active(dec, Utc::now()) {
+            return None;
         }
 
         Some(dec.allow)
@@ -197,13 +202,13 @@ impl PermissionStore {
     ///
     /// Only non-expired entries are included.
     pub fn to_cache_map(&self) -> HashMap<String, HashMap<String, bool>> {
-        let now = now_iso8601();
+        let now = Utc::now();
         self.decisions
             .iter()
             .map(|(ext_id, by_cap)| {
                 let filtered: HashMap<String, bool> = by_cap
                     .iter()
-                    .filter(|(_, dec)| dec.expires_at.as_ref().is_none_or(|exp| now <= *exp))
+                    .filter(|(_, dec)| decision_is_active(dec, now))
                     .map(|(cap, dec)| (cap.clone(), dec.allow))
                     .collect();
                 (ext_id.clone(), filtered)
@@ -215,13 +220,13 @@ impl PermissionStore {
     /// Retrieve the full decision cache (including version ranges) for
     /// runtime enforcement.
     pub fn to_decision_cache(&self) -> HashMap<String, HashMap<String, PersistedDecision>> {
-        let now = now_iso8601();
+        let now = Utc::now();
         self.decisions
             .iter()
             .map(|(ext_id, by_cap)| {
                 let filtered: HashMap<String, PersistedDecision> = by_cap
                     .iter()
-                    .filter(|(_, dec)| dec.expires_at.as_ref().is_none_or(|exp| now <= *exp))
+                    .filter(|(_, dec)| decision_is_active(dec, now))
                     .map(|(cap, dec)| (cap.clone(), dec.clone()))
                     .collect();
                 (ext_id.clone(), filtered)
@@ -304,6 +309,19 @@ fn now_iso8601() -> String {
     // Convert days since epoch to date using a basic algorithm.
     let (year, month, day) = days_to_ymd(days);
     format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
+}
+
+fn parse_expiry_timestamp(expires_at: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(expires_at)
+        .ok()
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+}
+
+fn decision_is_active(decision: &PersistedDecision, now: DateTime<Utc>) -> bool {
+    match decision.expires_at.as_deref() {
+        Some(expires_at) => parse_expiry_timestamp(expires_at).is_some_and(|expiry| now <= expiry),
+        None => true,
+    }
 }
 
 /// Convert days since Unix epoch to (year, month, day).
@@ -688,6 +706,18 @@ mod tests {
     }
 
     #[test]
+    fn open_unsupported_schema_version_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("permissions.json");
+        std::fs::write(&path, r#"{"version":999,"decisions":{}}"#).unwrap();
+
+        let result = PermissionStore::open(&path);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("Unsupported permissions file schema version"));
+    }
+
+    #[test]
     fn lookup_expired_decision_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("permissions.json");
@@ -734,6 +764,51 @@ mod tests {
             );
 
         assert_eq!(store.lookup("ext", "exec"), Some(false));
+    }
+
+    #[test]
+    fn lookup_expiry_with_timezone_offset_uses_actual_timestamp() {
+        let decision = PersistedDecision {
+            capability: "exec".to_string(),
+            allow: true,
+            decided_at: "2026-01-01T00:00:00Z".to_string(),
+            expires_at: Some("2026-01-01T00:30:00+01:00".to_string()),
+            version_range: None,
+        };
+        let now = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert!(
+            !decision_is_active(&decision, now),
+            "offset expiry should be normalized before comparison"
+        );
+    }
+
+    #[test]
+    fn lookup_invalid_expiry_treated_as_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("permissions.json");
+        let mut store = PermissionStore::open(&path).unwrap();
+
+        store
+            .decisions
+            .entry("ext".to_string())
+            .or_default()
+            .insert(
+                "exec".to_string(),
+                PersistedDecision {
+                    capability: "exec".to_string(),
+                    allow: true,
+                    decided_at: "2026-01-01T00:00:00Z".to_string(),
+                    expires_at: Some("not-a-timestamp".to_string()),
+                    version_range: None,
+                },
+            );
+
+        assert_eq!(store.lookup("ext", "exec"), None);
+        let cache = store.to_cache_map();
+        assert_eq!(cache.get("ext").and_then(|caps| caps.get("exec")), None);
     }
 
     #[test]
