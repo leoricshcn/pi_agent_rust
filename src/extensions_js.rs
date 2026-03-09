@@ -14602,53 +14602,19 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                                             && configured_repair_mode.should_apply() =>
                                     {
                                         // Pattern 2 (bd-k5q5.8.3): missing asset fallback.
-                                        let checked_path = std::fs::canonicalize(&requested_abs)
-                                            .map(crate::extensions::strip_unc_prefix)
-                                            .or_else(|canonicalize_err| {
-                                                if canonicalize_err.kind()
-                                                    == std::io::ErrorKind::NotFound
-                                                {
-                                                    let mut ancestor = requested_abs.as_path();
-                                                    loop {
-                                                        ancestor = match ancestor.parent() {
-                                                            Some(p) if !p.as_os_str().is_empty() => p,
-                                                            _ => break,
-                                                        };
-                                                        if let Ok(canonical_ancestor) =
-                                                            std::fs::canonicalize(ancestor).map(
-                                                                crate::extensions::strip_unc_prefix,
-                                                            )
-                                                        {
-                                                            if canonical_ancestor
-                                                                .starts_with(&workspace_root)
-                                                            {
-                                                                return Ok(requested_abs.clone());
-                                                            }
-                                                            if let Ok(roots) =
-                                                                allowed_read_roots.lock()
-                                                            {
-                                                                for root in roots.iter() {
-                                                                    if canonical_ancestor
-                                                                        .starts_with(root)
-                                                                    {
-                                                                        return Ok(
-                                                                            requested_abs.clone()
-                                                                        );
-                                                                    }
-                                                                }
-                                                            }
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                                Err(canonicalize_err)
-                                            })
-                                            .map_err(|canonicalize_err| {
-                                                rquickjs::Error::new_loading_message(
-                                                    &path,
-                                                    format!("host read open: {canonicalize_err}"),
-                                                )
-                                            })?;
+                                        let checked_path = crate::extensions::safe_canonicalize(&requested_abs);
+
+                                        let in_ext_root = allowed_read_roots.lock().is_ok_and(|roots| {
+                                            roots.iter().any(|root| checked_path.starts_with(root))
+                                        });
+                                        let allowed = checked_path.starts_with(&workspace_root) || in_ext_root;
+
+                                        if !allowed {
+                                            return Err(rquickjs::Error::new_loading_message(
+                                                &path,
+                                                format!("host read open: {err}"),
+                                            ));
+                                        }
 
                                         return apply_missing_asset_fallback(&checked_path, &err.to_string());
                                     }
@@ -14711,49 +14677,7 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
 
                             #[cfg(not(target_os = "linux"))]
                             {
-                                let checked_path = std::fs::canonicalize(&requested_abs)
-                                    .map(crate::extensions::strip_unc_prefix)
-                                    .or_else(|err| {
-                                        if err.kind() == std::io::ErrorKind::NotFound {
-                                            // Walk up the ancestor chain to find the nearest
-                                            // existing directory.  This handles cases where
-                                            // intermediate directories are missing (e.g.
-                                            // form/index.html where form/ doesn't exist).
-                                            let mut ancestor = requested_abs.as_path();
-                                            loop {
-                                                ancestor = match ancestor.parent() {
-                                                    Some(p) if !p.as_os_str().is_empty() => p,
-                                                    _ => break,
-                                                };
-                                                if let Ok(canonical_ancestor) =
-                                                    std::fs::canonicalize(ancestor)
-                                                        .map(crate::extensions::strip_unc_prefix)
-                                                {
-                                                    if canonical_ancestor
-                                                        .starts_with(&workspace_root)
-                                                    {
-                                                        return Ok(requested_abs.clone());
-                                                    }
-                                                    if let Ok(roots) = allowed_read_roots.lock() {
-                                                        for root in roots.iter() {
-                                                            if canonical_ancestor.starts_with(root)
-                                                            {
-                                                                return Ok(requested_abs.clone());
-                                                            }
-                                                        }
-                                                    }
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        Err(err)
-                                    })
-                                    .map_err(|err| {
-                                        rquickjs::Error::new_loading_message(
-                                            &path,
-                                            format!("host read: {err}"),
-                                        )
-                                    })?;
+                                let checked_path = crate::extensions::safe_canonicalize(&requested_abs);
 
                                 // Allow reads from workspace root or any registered
                                 // extension root directory.
@@ -14764,6 +14688,7 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                                 });
                                 let allowed =
                                     checked_path.starts_with(&workspace_root) || in_ext_root;
+
                                 if !allowed {
                                     return Err(rquickjs::Error::new_loading_message(
                                         &path,

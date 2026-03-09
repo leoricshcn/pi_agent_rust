@@ -4,11 +4,11 @@
 //! validation utilities plus a minimal WASM host scaffold.
 
 use crate::agent::AgentEvent;
+use crate::config::Config;
 use crate::connectors::Connector;
 use crate::connectors::http::HttpConnector;
 use crate::error::{Error, Result};
 use crate::extension_events::{ToolCallEventResult, ToolResultEventResult};
-use crate::config::Config;
 use crate::extensions_js::{
     ExtensionRepairEvent, ExtensionToolDef, HostcallKind, HostcallRequest, PiJsRuntime,
     PiJsRuntimeConfig, js_to_json, json_to_js,
@@ -24049,6 +24049,10 @@ impl ExtensionManager {
     /// Load persisted permission decisions into the inner state.
     fn load_persisted_permissions(inner: &mut ExtensionManagerInner) {
         let path = Config::permissions_path();
+        Self::load_persisted_permissions_from(inner, &path);
+    }
+
+    fn load_persisted_permissions_from(inner: &mut ExtensionManagerInner, path: &Path) {
         match PermissionStore::open(&path) {
             Ok(store) => {
                 // Seed the in-memory cache from persisted decisions.
@@ -31303,6 +31307,48 @@ mod tests {
             .expect("cached decision")
             .clone();
         assert_eq!(decision.version_range.as_deref(), Some("^2.5.1"));
+    }
+
+    #[test]
+    fn invalid_permissions_file_still_allows_future_decisions_to_persist() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("extension-permissions.json");
+        std::fs::write(&path, r#"{"version":999,"decisions":{}}"#)
+            .expect("write invalid permissions file");
+
+        let manager = extension_manager_no_persisted_permissions();
+        {
+            let mut guard = manager
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            ExtensionManager::load_persisted_permissions_from(&mut guard, &path);
+            assert!(guard.permission_store.is_some());
+            guard.extensions.push(RegisterPayload {
+                name: "Friendly Extension".to_string(),
+                version: "1.2.3".to_string(),
+                api_version: "1.0.0".to_string(),
+                capabilities: Vec::new(),
+                capability_manifest: None,
+                tools: Vec::new(),
+                slash_commands: Vec::new(),
+                shortcuts: Vec::new(),
+                flags: Vec::new(),
+                event_hooks: Vec::new(),
+            });
+            guard
+                .extension_versions
+                .insert("ext.persist".to_string(), "1.2.3".to_string());
+        }
+
+        manager.cache_policy_prompt_decision("ext.persist", "exec", true);
+
+        let store = PermissionStore::open(&path).expect("reload permissions file");
+        assert_eq!(store.lookup("ext.persist", "exec"), Some(true));
+
+        let raw = std::fs::read_to_string(&path).expect("read repaired permissions file");
+        assert!(raw.contains("\"version\": 1"));
+        assert!(raw.contains("\"ext.persist\""));
     }
 
     #[test]
