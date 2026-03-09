@@ -1417,7 +1417,7 @@ pub fn parse_command_args(args: &str) -> Vec<String> {
 
         if ch == '"' || ch == '\'' {
             in_quote = Some(ch);
-        } else if ch == ' ' || ch == '\t' {
+        } else if ch.is_whitespace() {
             if !current.is_empty() || just_closed_quote {
                 out.push(current.clone());
                 current.clear();
@@ -1434,6 +1434,18 @@ pub fn parse_command_args(args: &str) -> Vec<String> {
     }
 
     out
+}
+
+fn split_command_name_and_args(text: &str, prefix_len: usize) -> (&str, &str) {
+    let body = &text[prefix_len..];
+    let Some((idx, _)) = body.char_indices().find(|(_, ch)| ch.is_whitespace()) else {
+        return (body, "");
+    };
+
+    let args_start = prefix_len + idx;
+    let name = &text[prefix_len..args_start];
+    let args = text[args_start..].trim_start_matches(char::is_whitespace);
+    (name, args)
 }
 
 /// Cached regex for positional `$1`, `$2`, … substitution.
@@ -1490,9 +1502,7 @@ pub fn expand_prompt_template(text: &str, templates: &[PromptTemplate]) -> Strin
     if !text.starts_with('/') {
         return text.to_string();
     }
-    let space_index = text.find(' ');
-    let name = space_index.map_or(&text[1..], |idx| &text[1..idx]);
-    let args = space_index.map_or("", |idx| &text[idx + 1..]);
+    let (name, args) = split_command_name_and_args(text, 1);
 
     if let Some(template) = templates.iter().find(|t| t.name == name) {
         let args = parse_command_args(args);
@@ -1507,9 +1517,7 @@ fn expand_skill_command(text: &str, skills: &[Skill]) -> String {
         return text.to_string();
     }
 
-    let space_index = text.find(' ');
-    let name = space_index.map_or(&text[7..], |idx| &text[7..idx]);
-    let args = space_index.map_or("", |idx| text[idx + 1..].trim());
+    let (name, args) = split_command_name_and_args(text, 7);
 
     let Some(skill) = skills.iter().find(|s| s.name == name) else {
         return text.to_string();
@@ -1884,6 +1892,10 @@ mod tests {
             vec!["foo", "bar baz", "qux"]
         );
         assert_eq!(parse_command_args("foo 'bar baz'"), vec!["foo", "bar baz"]);
+        assert_eq!(
+            parse_command_args("foo\tbar\n\"baz qux\"\r\n''"),
+            vec!["foo", "bar", "baz qux", ""]
+        );
     }
 
     #[test]
@@ -1907,6 +1919,40 @@ mod tests {
         };
         let out = expand_prompt_template("/review foo", &[template]);
         assert_eq!(out, "Review foo");
+        let tab_out = expand_prompt_template("/review\tfoo", &[template.clone()]);
+        assert_eq!(tab_out, "Review foo");
+        let newline_out = expand_prompt_template("/review\nfoo", &[template]);
+        assert_eq!(newline_out, "Review foo");
+    }
+
+    #[test]
+    fn test_expand_skill_command_accepts_non_space_whitespace_separator() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("review");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        let skill_file = skill_dir.join("SKILL.md");
+        fs::write(
+            &skill_file,
+            "---\nname: review\ndescription: Review code\n---\nSkill body.\n",
+        )
+        .expect("write skill");
+
+        let skill = Skill {
+            name: "review".to_string(),
+            description: "Review code".to_string(),
+            file_path: skill_file,
+            base_dir: skill_dir,
+            source: "user".to_string(),
+            disable_model_invocation: false,
+        };
+
+        let tab_out = expand_skill_command("/skill:review\tfocus this file", &[skill.clone()]);
+        assert!(tab_out.contains("Skill body."));
+        assert!(tab_out.ends_with("focus this file"));
+
+        let newline_out = expand_skill_command("/skill:review\nfocus this file", &[skill]);
+        assert!(newline_out.contains("Skill body."));
+        assert!(newline_out.ends_with("focus this file"));
     }
 
     #[test]

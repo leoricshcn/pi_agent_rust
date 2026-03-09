@@ -524,24 +524,41 @@ pub(crate) fn delete_session_file(path: &Path) -> Result<()> {
 }
 
 fn delete_session_file_with_trash_cmd(path: &Path, trash_cmd: &str) -> Result<()> {
-    // Delete the sidecar directory first if it exists
-    let sidecar_path = crate::session_store_v2::v2_sidecar_path(path);
-    if sidecar_path.exists() && !try_trash_with_cmd(&sidecar_path, trash_cmd) {
-        if let Err(e) = fs::remove_dir_all(&sidecar_path) {
-            tracing::warn!(path = %sidecar_path.display(), error = %e, "Failed to remove session sidecar");
+    if try_trash_with_cmd(path, trash_cmd) {
+        remove_sidecar_dir_best_effort(&crate::session_store_v2::v2_sidecar_path(path), trash_cmd);
+        return Ok(());
+    }
+
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(Error::session(format!(
+                "Failed to delete session {}: {err}",
+                path.display()
+            )));
         }
     }
 
-    if try_trash_with_cmd(path, trash_cmd) {
-        return Ok(());
+    remove_sidecar_dir_best_effort(&crate::session_store_v2::v2_sidecar_path(path), trash_cmd);
+    Ok(())
+}
+
+fn remove_sidecar_dir_best_effort(sidecar_path: &Path, trash_cmd: &str) {
+    if !sidecar_path.exists() {
+        return;
     }
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(Error::session(format!(
-            "Failed to delete session {}: {err}",
-            path.display()
-        ))),
+
+    if try_trash_with_cmd(sidecar_path, trash_cmd) {
+        return;
+    }
+
+    if let Err(err) = fs::remove_dir_all(sidecar_path) {
+        tracing::warn!(
+            path = %sidecar_path.display(),
+            error = %err,
+            "Failed to remove session sidecar"
+        );
     }
 }
 
@@ -1128,6 +1145,46 @@ mod tests {
             "delete should be idempotent when file is already gone"
         );
         assert!(!session_path.exists(), "session file should remain deleted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_session_file_preserves_sidecar_when_primary_delete_fails() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session_path = tmp.path().join("delete-fails.jsonl");
+        fs::create_dir(&session_path).expect("create directory in place of session file");
+
+        let sidecar_path = crate::session_store_v2::v2_sidecar_path(&session_path);
+        fs::create_dir_all(&sidecar_path).expect("create sidecar");
+        fs::write(sidecar_path.join("manifest.json"), "{}\n").expect("write sidecar marker");
+
+        let trash_script = tmp.path().join("fake-trash-sidecar-only.sh");
+        fs::write(
+            &trash_script,
+            r#"#!/bin/sh
+case "$1" in
+  *.v2) mv "$1" "$1.trashed"; exit 0 ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .expect("write script");
+        let mut perms = fs::metadata(&trash_script).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&trash_script, perms).expect("chmod");
+
+        let trash_cmd = trash_script.to_string_lossy();
+        let result = delete_session_file_with_trash_cmd(&session_path, &trash_cmd);
+        assert!(
+            result.is_err(),
+            "directory-backed session path should fail deletion"
+        );
+        assert!(
+            sidecar_path.exists(),
+            "sidecar must be preserved when the main session path could not be deleted"
+        );
     }
 
     mod proptest_session_picker {

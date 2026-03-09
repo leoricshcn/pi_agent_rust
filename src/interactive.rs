@@ -145,8 +145,6 @@ use self::tree::{
 /// The override is pane-scoped: other panes in the same tmux session are not
 /// affected.  If `PI_TMUX_WHEEL_OVERRIDE=0` is set, no override is installed.
 struct TmuxWheelGuard {
-    /// The tmux pane identifier (e.g. "%3") used for the `-t` flag.
-    pane: String,
     /// Original WheelUp binding (None if there was no binding).
     saved_wheel_up: Option<String>,
     /// Original WheelDown binding (None if there was no binding).
@@ -170,9 +168,7 @@ impl TmuxWheelGuard {
         }
 
         // Check if we're in tmux.
-        if std::env::var_os("TMUX").is_none() {
-            return None;
-        }
+        std::env::var_os("TMUX")?;
 
         // Get the current pane ID.
         let pane = std::process::Command::new("tmux")
@@ -194,23 +190,15 @@ impl TmuxWheelGuard {
         }
 
         // Save existing WheelUpPane/WheelDownPane bindings so we can restore them.
-        // N.B. We search for the exact key names we override (WheelUpPane /
-        // WheelDownPane), not the shorter "WheelUp" / "WheelDown" which would
-        // also match unrelated keys like WheelUpStatus / WheelDownStatus.
         let saved_wheel_up = Self::get_binding("WheelUpPane");
         let saved_wheel_down = Self::get_binding("WheelDownPane");
 
-        // Override WheelUp and WheelDown for this pane to send-keys
-        // (i.e. forward the escape sequences to the application).
-        let _ = std::process::Command::new("tmux")
-            .args(["bind-key", "-T", "root", "WheelUpPane", "send-keys", "-M"])
-            .status();
-        let _ = std::process::Command::new("tmux")
-            .args(["bind-key", "-T", "root", "WheelDownPane", "send-keys", "-M"])
-            .status();
+        // `bind-key -T root` is global, so make the binding conditional on the
+        // current pane and delegate to the original command for all other panes.
+        Self::install_binding_for_pane(&pane, "WheelUpPane", saved_wheel_up.as_deref());
+        Self::install_binding_for_pane(&pane, "WheelDownPane", saved_wheel_down.as_deref());
 
         Some(Self {
-            pane,
             saved_wheel_up,
             saved_wheel_down,
         })
@@ -227,27 +215,132 @@ impl TmuxWheelGuard {
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         // Each line looks like: bind-key    -T root    WheelUpPane    if-shell -F ...
-        // Match on exact whitespace-delimited token to avoid false positives
-        // (e.g. "WheelUpPane" must not match "WheelUpPaneFoo" or "WheelUpStatus").
         for line in stdout.lines() {
-            if line.split_whitespace().any(|tok| tok == key) {
+            if Self::binding_key_and_command(line).is_some_and(|(bound_key, _)| bound_key == key) {
                 return Some(line.trim().to_string());
             }
         }
         None
     }
 
+    /// Extract the bound command payload from a `list-keys` line.
+    fn binding_command(saved_line: &str, key_name: &str) -> Option<String> {
+        let (bound_key, command) = Self::binding_key_and_command(saved_line)?;
+        (bound_key == key_name && !command.is_empty()).then(|| command.to_string())
+    }
+
+    fn binding_key_and_command(saved_line: &str) -> Option<(&str, &str)> {
+        let (_, bind_end) = Self::next_shell_token_bounds(saved_line, 0)?;
+        if saved_line.get(..bind_end)? != "bind-key" {
+            return None;
+        }
+
+        let mut cursor = bind_end;
+        loop {
+            let (token_start, token_end) = Self::next_shell_token_bounds(saved_line, cursor)?;
+            let token = saved_line.get(token_start..token_end)?;
+            cursor = token_end;
+
+            match token {
+                "-T" | "-N" => {
+                    let (_, value_end) = Self::next_shell_token_bounds(saved_line, cursor)?;
+                    cursor = value_end;
+                }
+                _ if token.starts_with('-') => {}
+                _ => {
+                    let command = saved_line.get(cursor..)?.trim_start();
+                    return Some((token, command));
+                }
+            }
+        }
+    }
+
+    fn next_shell_token_bounds(input: &str, from: usize) -> Option<(usize, usize)> {
+        let bytes = input.as_bytes();
+        let mut idx = from;
+        while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        if idx >= bytes.len() {
+            return None;
+        }
+
+        let start = idx;
+        let mut in_single = false;
+        let mut in_double = false;
+        while idx < bytes.len() {
+            let byte = bytes[idx];
+            if in_single {
+                if byte == b'\'' {
+                    in_single = false;
+                }
+                idx += 1;
+                continue;
+            }
+            if in_double {
+                if byte == b'\\' && idx + 1 < bytes.len() {
+                    idx += 2;
+                    continue;
+                }
+                if byte == b'"' {
+                    in_double = false;
+                }
+                idx += 1;
+                continue;
+            }
+
+            match byte {
+                b'\'' => {
+                    in_single = true;
+                    idx += 1;
+                }
+                b'"' => {
+                    in_double = true;
+                    idx += 1;
+                }
+                b'\\' if idx + 1 < bytes.len() => {
+                    idx += 2;
+                }
+                _ if byte.is_ascii_whitespace() => break,
+                _ => {
+                    idx += 1;
+                }
+            }
+        }
+
+        Some((start, idx))
+    }
+
+    /// Install a tmux mouse-wheel override that only applies to `pane`.
+    fn install_binding_for_pane(pane: &str, key_name: &str, saved_line: Option<&str>) {
+        let fallback = saved_line
+            .and_then(|line| Self::binding_command(line, key_name))
+            .unwrap_or_default();
+        let args = Self::pane_scoped_binding_args(pane, key_name, fallback);
+        let _ = std::process::Command::new("tmux").args(&args).status();
+    }
+
+    fn pane_scoped_binding_args(pane: &str, key_name: &str, fallback: String) -> Vec<String> {
+        let condition = format!("#{{==:#{{pane_id}},{pane}}}");
+        vec![
+            "bind-key".to_string(),
+            "-T".to_string(),
+            "root".to_string(),
+            key_name.to_string(),
+            "if-shell".to_string(),
+            "-F".to_string(),
+            condition,
+            "send-keys -M".to_string(),
+            fallback,
+        ]
+    }
+
     /// Restore the original binding for a wheel direction, or unbind if there
     /// was no previous binding.
-    fn restore_binding(saved: &Option<String>, key_name: &str) {
+    fn restore_binding(saved: Option<&str>, key_name: &str) {
         if let Some(line) = saved {
-            // Try to re-execute the original bind-key line.
-            // The saved line is a full `bind-key -T root ...` command.
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 4 {
-                // Re-run the full bind-key command via tmux.
-                let _ = std::process::Command::new("tmux").args(&parts).status();
-            }
+            // Restore the exact serialized bind-key command that tmux gave us.
+            Self::run_tmux_command_line(line);
         } else {
             // No previous binding — unbind to revert to tmux default behavior.
             let _ = std::process::Command::new("tmux")
@@ -255,12 +348,31 @@ impl TmuxWheelGuard {
                 .status();
         }
     }
+
+    fn run_tmux_command_line(command: &str) {
+        use std::io::Write as _;
+
+        let Ok(mut child) = std::process::Command::new("tmux")
+            .args(["source-file", "-"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        else {
+            return;
+        };
+
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(command.as_bytes());
+            let _ = stdin.write_all(b"\n");
+        }
+
+        let _ = child.wait();
+    }
 }
 
 impl Drop for TmuxWheelGuard {
     fn drop(&mut self) {
-        Self::restore_binding(&self.saved_wheel_up, "WheelUpPane");
-        Self::restore_binding(&self.saved_wheel_down, "WheelDownPane");
+        Self::restore_binding(self.saved_wheel_up.as_deref(), "WheelUpPane");
+        Self::restore_binding(self.saved_wheel_down.as_deref(), "WheelDownPane");
     }
 }
 
@@ -1475,7 +1587,7 @@ pub async fn run_interactive(
         conversation_from_session(&guard)
     };
 
-    let app = PiApp::new(
+    Program::new(PiApp::new(
         agent,
         session,
         config,
@@ -1493,13 +1605,11 @@ pub async fn run_interactive(
         None,
         messages,
         usage,
-    );
-
-    Program::new(app)
-        .with_alt_screen()
-        .with_mouse_cell_motion()
-        .with_input_receiver(ui_rx)
-        .run()?;
+    ))
+    .with_alt_screen()
+    .with_mouse_cell_motion()
+    .with_input_receiver(ui_rx)
+    .run()?;
 
     let _ = crossterm::execute!(std::io::stdout(), cursor::Show);
     println!("Goodbye!");
@@ -1590,8 +1700,8 @@ pub enum PiMsg {
 /// `Some("abc1234")` (7-char short SHA) for detached HEAD,
 /// or `None` if not in a git repo or `.git/HEAD` is unreadable.
 fn read_git_branch(cwd: &Path) -> Option<String> {
-    let git_head = cwd.join(".git/HEAD");
-    let content = std::fs::read_to_string(&git_head).ok()?;
+    let git_head = find_git_head_path(cwd)?;
+    let content = std::fs::read_to_string(git_head).ok()?;
     let content = content.trim();
     content.strip_prefix("ref: refs/heads/").map_or_else(
         || {
@@ -1601,6 +1711,47 @@ fn read_git_branch(cwd: &Path) -> Option<String> {
         },
         |ref_path| Some(ref_path.to_string()),
     )
+}
+
+fn find_git_head_path(cwd: &Path) -> Option<PathBuf> {
+    let mut current = cwd.to_path_buf();
+    loop {
+        let dot_git = current.join(".git");
+        if let Some(git_head) = resolve_git_head_path(&dot_git) {
+            return Some(git_head);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn resolve_git_head_path(dot_git: &Path) -> Option<PathBuf> {
+    if dot_git.is_dir() {
+        let head = dot_git.join("HEAD");
+        return head.is_file().then_some(head);
+    }
+
+    if dot_git.is_file() {
+        let dot_git_contents = std::fs::read_to_string(dot_git).ok()?;
+        let gitdir = dot_git_contents
+            .trim()
+            .strip_prefix("gitdir:")
+            .map(str::trim)?;
+        if gitdir.is_empty() {
+            return None;
+        }
+        let resolved_gitdir = Path::new(gitdir);
+        let resolved_gitdir = if resolved_gitdir.is_absolute() {
+            resolved_gitdir.to_path_buf()
+        } else {
+            dot_git.parent()?.join(resolved_gitdir)
+        };
+        let head = resolved_gitdir.join("HEAD");
+        return head.is_file().then_some(head);
+    }
+
+    None
 }
 
 fn build_startup_welcome_message(config: &Config) -> String {

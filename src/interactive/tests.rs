@@ -113,6 +113,62 @@ fn startup_init_cmd_sequences_window_size_before_pending() {
 }
 
 #[test]
+fn tmux_wheel_guard_extracts_saved_binding_command() {
+    let line = r##"bind-key -T root WheelUpPane            if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e }"##;
+    assert_eq!(
+        TmuxWheelGuard::binding_command(line, "WheelUpPane").as_deref(),
+        Some(
+            r##"if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e }"##
+        )
+    );
+}
+
+#[test]
+fn tmux_wheel_guard_extracts_repeatable_binding_command() {
+    let line = r"bind-key -r -T root WheelUpPane send-keys -M";
+    assert_eq!(
+        TmuxWheelGuard::binding_command(line, "WheelUpPane").as_deref(),
+        Some("send-keys -M")
+    );
+}
+
+#[test]
+fn tmux_wheel_guard_extracts_command_after_quoted_option_value() {
+    let line = r#"bind-key -N "wheel note" -T root WheelUpPane display-message "foo bar""#;
+    assert_eq!(
+        TmuxWheelGuard::binding_command(line, "WheelUpPane").as_deref(),
+        Some(r#"display-message "foo bar""#)
+    );
+}
+
+#[test]
+fn tmux_wheel_guard_builds_pane_scoped_binding_args() {
+    let fallback =
+        r##"if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e }"##
+            .to_string();
+    let args = TmuxWheelGuard::pane_scoped_binding_args("%3", "WheelUpPane", fallback.clone());
+
+    assert_eq!(args[0], "bind-key");
+    assert_eq!(args[1], "-T");
+    assert_eq!(args[2], "root");
+    assert_eq!(args[3], "WheelUpPane");
+    assert_eq!(args[4], "if-shell");
+    assert_eq!(args[5], "-F");
+    assert_eq!(args[6], "#{==:#{pane_id},%3}");
+    assert_eq!(args[7], "send-keys -M");
+    assert_eq!(args[8], fallback);
+}
+
+#[test]
+fn tmux_wheel_guard_binding_command_preserves_quoted_segments() {
+    let line = r#"bind-key -T root WheelUpPane display-message "foo bar""#;
+    assert_eq!(
+        TmuxWheelGuard::binding_command(line, "WheelUpPane").as_deref(),
+        Some(r#"display-message "foo bar""#)
+    );
+}
+
+#[test]
 fn tool_message_auto_collapse_threshold() {
     // Small output: not collapsed.
     let small = ConversationMessage::tool("Tool bash:\nline1\nline2".to_string());
@@ -1677,4 +1733,31 @@ fn git_branch_empty_head() {
     std::fs::create_dir(&git_dir).unwrap();
     std::fs::write(git_dir.join("HEAD"), "").unwrap();
     assert_eq!(super::read_git_branch(dir.path()), None);
+}
+
+#[test]
+fn git_branch_found_from_nested_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let git_dir = dir.path().join(".git");
+    let nested = dir.path().join("src/ui");
+    std::fs::create_dir(&git_dir).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    assert_eq!(super::read_git_branch(&nested), Some("main".to_string()));
+}
+
+#[test]
+fn git_branch_worktree_gitdir_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("worktree/src");
+    let worktree_root = dir.path().join("worktree");
+    let gitdir = dir.path().join("actual-git-dir");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(&gitdir).unwrap();
+    std::fs::write(worktree_root.join(".git"), "gitdir: ../actual-git-dir\n").unwrap();
+    std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/feature/worktree\n").unwrap();
+    assert_eq!(
+        super::read_git_branch(&nested),
+        Some("feature/worktree".to_string())
+    );
 }
