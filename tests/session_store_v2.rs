@@ -1668,6 +1668,39 @@ fn migrate_jsonl_to_v2_preserves_existing_sidecar_on_rebuild_failure() -> PiResu
 }
 
 #[test]
+fn create_v2_sidecar_from_jsonl_preserves_existing_sidecar_on_rebuild_failure() -> PiResult<()> {
+    let dir = tempdir()?;
+    let entries = vec![
+        make_message_entry("keep1", None, "first"),
+        make_message_entry("keep2", Some("keep1"), "second"),
+    ];
+    let jsonl = build_test_jsonl(dir.path(), &entries);
+
+    pi::session::create_v2_sidecar_from_jsonl(&jsonl)?;
+    let v2_root = pi::session_store_v2::v2_sidecar_path(&jsonl);
+    let baseline_store = SessionStoreV2::create(&v2_root, 64 * 1024 * 1024)?;
+    let baseline_ids = frame_ids(&baseline_store.read_all_entries()?);
+
+    let mut file = fs::OpenOptions::new().append(true).open(&jsonl)?;
+    file.write_all(b"{ definitely-not-json }\n")?;
+
+    let err = pi::session::create_v2_sidecar_from_jsonl(&jsonl)
+        .expect_err("invalid JSONL should abort sidecar rebuild");
+    assert!(
+        err.to_string().contains("Bad JSONL entry"),
+        "unexpected error: {err}"
+    );
+
+    let recovered_store = SessionStoreV2::create(&v2_root, 64 * 1024 * 1024)?;
+    assert_eq!(
+        frame_ids(&recovered_store.read_all_entries()?),
+        baseline_ids
+    );
+
+    Ok(())
+}
+
+#[test]
 fn migrate_jsonl_to_v2_failure_does_not_leave_partial_sidecars() -> PiResult<()> {
     let dir = tempdir()?;
     let entries = vec![make_message_entry("bad1", None, "first")];

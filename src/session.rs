@@ -3888,7 +3888,40 @@ fn open_from_v2_store_blocking(jsonl_path: PathBuf) -> Result<(Session, SessionO
 /// use `open_from_v2_store_blocking` for O(index+tail) resume.
 pub fn create_v2_sidecar_from_jsonl(jsonl_path: &Path) -> Result<SessionStoreV2> {
     let v2_root = session_store_v2::v2_sidecar_path(jsonl_path);
-    build_v2_sidecar_from_jsonl_into(jsonl_path, &v2_root)
+    if !v2_root.exists() {
+        return build_v2_sidecar_from_jsonl_into(jsonl_path, &v2_root);
+    }
+
+    let staging_root = unique_sidecar_aux_path(&v2_root, "staging");
+    let _staged_store = match build_v2_sidecar_from_jsonl_into(jsonl_path, &staging_root) {
+        Ok(store) => store,
+        Err(err) => {
+            let _ = cleanup_sidecar_root(&staging_root);
+            return Err(err);
+        }
+    };
+
+    let backup_root = unique_sidecar_aux_path(&v2_root, "backup");
+    if let Err(err) = std::fs::rename(&v2_root, &backup_root) {
+        let _ = cleanup_sidecar_root(&staging_root);
+        return Err(crate::Error::Io(Box::new(err)));
+    }
+
+    if let Err(err) = std::fs::rename(&staging_root, &v2_root) {
+        let _ = std::fs::rename(&backup_root, &v2_root);
+        let _ = cleanup_sidecar_root(&staging_root);
+        return Err(crate::Error::Io(Box::new(err)));
+    }
+
+    if let Err(err) = cleanup_sidecar_root(&backup_root) {
+        tracing::warn!(
+            path = %backup_root.display(),
+            error = %err,
+            "create_v2_sidecar_from_jsonl left backup sidecar after successful swap"
+        );
+    }
+
+    SessionStoreV2::create(&v2_root, 64 * 1024 * 1024)
 }
 
 fn build_v2_sidecar_from_jsonl_into(jsonl_path: &Path, v2_root: &Path) -> Result<SessionStoreV2> {
