@@ -378,12 +378,10 @@ pub fn list_sessions_for_project(cwd: &Path, override_dir: Option<&Path>) -> Vec
             .collect();
 
         for meta in scanned {
-            let should_replace = by_path
-                .get(&meta.path)
-                .is_some_and(|existing| meta.last_modified_ms > existing.last_modified_ms);
-            if should_replace || !by_path.contains_key(&meta.path) {
-                by_path.insert(meta.path.clone(), meta);
-            }
+            // Disk scans are authoritative for successfully parsed session files.
+            // Keep indexed rows only for paths that weren't discovered on disk or
+            // could not be reparsed during the scan.
+            by_path.insert(meta.path.clone(), meta);
         }
 
         sessions = by_path.into_values().collect();
@@ -630,6 +628,8 @@ mod tests {
     use crate::session::{SessionMessage, SessionStoreKind};
     #[cfg(feature = "sqlite-sessions")]
     use asupersync::runtime::RuntimeBuilder;
+    use sqlmodel_core::Value;
+    use sqlmodel_sqlite::{OpenFlags, SqliteConfig, SqliteConnection};
     #[cfg(feature = "sqlite-sessions")]
     use std::future::Future;
 
@@ -1095,6 +1095,61 @@ mod tests {
     fn scan_sessions_on_disk_nonexistent_dir_returns_empty() {
         let found = scan_sessions_on_disk(Path::new("/nonexistent/dir"));
         assert!(found.is_empty());
+    }
+
+    #[test]
+    fn list_sessions_for_project_prefers_scanned_meta_when_cached_row_is_stale() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_dir = tmp.path().join("sessions");
+        let cwd = tmp.path().join("repo");
+        let project_dir = base_dir.join(encode_cwd(&cwd));
+        fs::create_dir_all(&project_dir).expect("create project sessions");
+
+        let session_path = project_dir.join("stale-index.jsonl");
+        let mut header = SessionHeader::new();
+        header.id = "stale-index".to_string();
+        header.cwd = cwd.display().to_string();
+        header.timestamp = "2025-06-01T12:00:00.000Z".to_string();
+
+        let content = format!(
+            "{}\n{{\"type\":\"message\"}}\n{{\"type\":\"message\"}}\n{{\"type\":\"session_info\",\"name\":\"Fresh name\"}}\n",
+            serde_json::to_string(&header).expect("serialize header"),
+        );
+        fs::write(&session_path, content).expect("write session");
+
+        let expected = build_meta_from_jsonl(&session_path).expect("load fresh meta");
+        let index = SessionIndex::for_sessions_root(&base_dir);
+        index.reindex_all().expect("seed session index");
+
+        let db_path = base_dir.join("session-index.sqlite");
+        let config = SqliteConfig::file(db_path.to_string_lossy())
+            .flags(OpenFlags::create_read_write())
+            .busy_timeout(5000);
+        let conn = SqliteConnection::open(&config).expect("open session index sqlite");
+        conn.execute_sync(
+            "UPDATE sessions
+             SET message_count=?1, size_bytes=?2, name=?3
+             WHERE path=?4",
+            &[
+                Value::BigInt(0),
+                Value::BigInt(
+                    i64::try_from(expected.size_bytes.saturating_sub(1)).expect("size fits in i64"),
+                ),
+                Value::Text("Stale name".to_string()),
+                Value::Text(session_path.display().to_string()),
+            ],
+        )
+        .expect("corrupt cached row");
+
+        let sessions = list_sessions_for_project(&cwd, Some(&base_dir));
+        assert_eq!(sessions.len(), 1);
+
+        let session = &sessions[0];
+        assert_eq!(session.path, session_path.display().to_string());
+        assert_eq!(session.message_count, expected.message_count);
+        assert_eq!(session.size_bytes, expected.size_bytes);
+        assert_eq!(session.name, expected.name);
+        assert_eq!(session.last_modified_ms, expected.last_modified_ms);
     }
 
     #[cfg(feature = "sqlite-sessions")]

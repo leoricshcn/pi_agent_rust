@@ -444,6 +444,9 @@ fn build_meta(
     header: &SessionHeader,
     entries: &[SessionEntry],
 ) -> Result<SessionMeta> {
+    header
+        .validate()
+        .map_err(|reason| Error::session(format!("Invalid session header: {reason}")))?;
     let (message_count, name) = session_stats(entries);
     let (last_modified_ms, size_bytes) = session_file_stats(path)?;
     Ok(SessionMeta {
@@ -488,6 +491,12 @@ fn build_meta_from_jsonl(path: &Path) -> Result<SessionMeta> {
 
     let header: SessionHeader = serde_json::from_str(&header_line)
         .map_err(|err| Error::session(format!("Parse session header {}: {err}", path.display())))?;
+    header.validate().map_err(|reason| {
+        Error::session(format!(
+            "Invalid session header {}: {reason}",
+            path.display()
+        ))
+    })?;
 
     let mut message_count = 0u64;
     let mut name = None;
@@ -536,6 +545,12 @@ fn build_meta_from_sqlite(path: &Path) -> Result<SessionMeta> {
         crate::session_sqlite::load_session_meta(path).await
     })?;
     let header = meta.header;
+    header.validate().map_err(|reason| {
+        Error::session(format!(
+            "Invalid session header {}: {reason}",
+            path.display()
+        ))
+    })?;
     let (last_modified_ms, size_bytes) = session_file_stats(path)?;
 
     Ok(SessionMeta {
@@ -1122,6 +1137,28 @@ mod tests {
         assert!(
             matches!(err, Error::Session(ref msg) if msg.contains("Parse session header")),
             "Expected Error::Session containing Parse session header, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn build_meta_from_file_rejects_semantically_invalid_header() {
+        let harness = TestHarness::new("build_meta_from_file_rejects_semantically_invalid_header");
+        let path = harness.temp_path("bad_semantic_header.jsonl");
+        let header = SessionHeader {
+            r#type: "note".to_string(),
+            id: "bad-id".to_string(),
+            cwd: "/tmp".to_string(),
+            timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+            ..SessionHeader::default()
+        };
+        write_session_jsonl(&path, &header, &[]);
+
+        let err = build_meta_from_file(&path).expect_err("expected invalid header error");
+        harness.log().info("verify", format!("error: {err}"));
+
+        assert!(
+            matches!(err, Error::Session(ref msg) if msg.contains("Invalid session header")),
+            "Expected Error::Session containing Invalid session header, got {err:?}",
         );
     }
 

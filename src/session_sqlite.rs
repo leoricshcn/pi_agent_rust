@@ -91,6 +91,9 @@ pub async fn load_session(path: &Path) -> Result<(SessionHeader, Vec<SessionEntr
         .ok_or_else(|| Error::session("SQLite session missing header row"))?;
     let header_json = row_get_str(header_row, "json")?;
     let header: SessionHeader = serde_json::from_str(header_json)?;
+    header
+        .validate()
+        .map_err(|reason| Error::session(format!("Invalid session header: {reason}")))?;
 
     let entry_rows = map_outcome(
         conn.query(
@@ -133,6 +136,9 @@ pub async fn load_session_meta(path: &Path) -> Result<SqliteSessionMeta> {
         .ok_or_else(|| Error::session("SQLite session missing header row"))?;
     let header_json = row_get_str(header_row, "json")?;
     let header: SessionHeader = serde_json::from_str(header_json)?;
+    header
+        .validate()
+        .map_err(|reason| Error::session(format!("Invalid session header: {reason}")))?;
 
     let meta_rows = match conn
         .query(
@@ -519,6 +525,60 @@ mod tests {
         assert_eq!(count, 1);
         assert!(name.is_none());
     }
+
+    #[test]
+    fn save_session_rejects_semantically_invalid_header() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("invalid.sqlite");
+        let header = SessionHeader {
+            r#type: "note".to_string(),
+            ..SessionHeader::default()
+        };
+
+        let err = futures::executor::block_on(async { save_session(&path, &header, &[]).await })
+            .expect_err("invalid header should fail");
+        let message = err.to_string();
+        assert!(
+            message.contains("Invalid session header"),
+            "expected invalid session header error, got {message}"
+        );
+    }
+
+    #[test]
+    fn load_session_meta_rejects_semantically_invalid_header() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("invalid.sqlite");
+        let header = SessionHeader {
+            id: "sqlite-test".to_string(),
+            ..SessionHeader::default()
+        };
+
+        futures::executor::block_on(async { save_session(&path, &header, &[]).await })
+            .expect("save sqlite session");
+
+        let invalid_header = SessionHeader {
+            r#type: "note".to_string(),
+            ..header
+        };
+        let invalid_json =
+            serde_json::to_string(&invalid_header).expect("serialize invalid session header");
+        let config = sqlmodel_sqlite::SqliteConfig::file(path.to_string_lossy())
+            .flags(sqlmodel_sqlite::OpenFlags::create_read_write());
+        let conn = sqlmodel_sqlite::SqliteConnection::open(&config).expect("open sqlite db");
+        conn.execute_sync(
+            "UPDATE pi_session_header SET json = ?1",
+            &[sqlmodel_core::Value::Text(invalid_json)],
+        )
+        .expect("corrupt sqlite header row");
+
+        let err = futures::executor::block_on(async { load_session_meta(&path).await })
+            .expect_err("invalid header should fail");
+        let message = err.to_string();
+        assert!(
+            message.contains("Invalid session header"),
+            "expected invalid session header error, got {message}"
+        );
+    }
 }
 
 pub async fn save_session(
@@ -526,6 +586,9 @@ pub async fn save_session(
     header: &SessionHeader,
     entries: &[SessionEntry],
 ) -> Result<()> {
+    header
+        .validate()
+        .map_err(|reason| Error::session(format!("Invalid session header: {reason}")))?;
     let metrics = session_metrics::global();
     let _save_timer = metrics.start_timer(&metrics.sqlite_save);
 

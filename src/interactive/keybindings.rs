@@ -1369,6 +1369,49 @@ mod tests {
     }
 
     #[test]
+    fn session_header_sync_ignores_incomplete_model_header_and_keeps_current_runtime() {
+        let mut current = model_entry("acme-local", "plain-model", None, HashMap::new());
+        current.auth_header = false;
+        current.model.reasoning = false;
+        let mut app = build_test_app(current.clone(), vec![current]);
+
+        {
+            let mut guard = app.agent.try_lock().expect("agent lock");
+            guard.stream_options_mut().thinking_level = Some(crate::model::ThinkingLevel::High);
+        }
+        {
+            let mut guard = app.session.try_lock().expect("session lock");
+            guard.header.provider = Some("partial-provider".to_string());
+            guard.header.model_id = None;
+            guard.header.thinking_level = Some(crate::model::ThinkingLevel::High.to_string());
+        }
+
+        app.sync_runtime_selection_from_session_header()
+            .expect("incomplete headers should not block runtime sync");
+
+        let agent_guard = app.agent.try_lock().expect("agent lock");
+        assert_eq!(agent_guard.provider().name(), "acme-local");
+        assert_eq!(agent_guard.provider().model_id(), "plain-model");
+        assert_eq!(
+            agent_guard.stream_options().thinking_level,
+            Some(crate::model::ThinkingLevel::Off)
+        );
+        drop(agent_guard);
+
+        assert_eq!(app.model, "acme-local/plain-model");
+        assert_eq!(app.model_entry.model.provider, "acme-local");
+        assert_eq!(app.model_entry.model.id, "plain-model");
+
+        let session_guard = app.session.try_lock().expect("session lock");
+        assert_eq!(
+            session_guard.header.provider.as_deref(),
+            Some("partial-provider")
+        );
+        assert_eq!(session_guard.header.model_id, None);
+        assert_eq!(session_guard.header.thinking_level.as_deref(), Some("off"));
+    }
+
+    #[test]
     fn custom_extension_key_handler_queues_rune_input_when_active() {
         let current = model_entry("openai", "gpt-4o-mini", Some("old-key"), HashMap::new());
         let mut app = build_test_app(current.clone(), vec![current]);
