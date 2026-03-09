@@ -23743,6 +23743,7 @@ struct CachedEventContext {
 #[derive(Default)]
 struct ExtensionManagerInner {
     extensions: Vec<RegisterPayload>,
+    extension_versions: HashMap<String, String>,
     runtime: Option<ExtensionRuntimeHandle>,
     #[cfg(feature = "wasm-host")]
     wasm_extensions: Vec<WasmExtensionHandle>,
@@ -23921,78 +23922,110 @@ impl std::fmt::Debug for ExtensionRegion {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SemverTriplet {
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+fn parse_semver_triplet(input: &str) -> Option<SemverTriplet> {
+    let trimmed = input.trim();
+    let input = trimmed.strip_prefix('v').unwrap_or(trimmed);
+    let core = input.split(['-', '+']).next()?;
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    Some(SemverTriplet {
+        major,
+        minor,
+        patch,
+    })
+}
+
+fn matches_semver_token(version: SemverTriplet, token: &str) -> bool {
+    let token = token.trim();
+    if token.is_empty() || token == "*" {
+        return true;
+    }
+
+    if let Some(rest) = token.strip_prefix('^') {
+        let Some(lower) = parse_semver_triplet(rest) else {
+            return false;
+        };
+        if version < lower {
+            return false;
+        }
+        if lower.major == 0 {
+            if lower.minor == 0 {
+                return version.major == 0 && version.minor == 0 && version.patch == lower.patch;
+            }
+            return version.major == 0 && version.minor == lower.minor;
+        }
+        return version.major == lower.major;
+    }
+
+    if let Some(rest) = token.strip_prefix('~') {
+        let Some(lower) = parse_semver_triplet(rest) else {
+            return false;
+        };
+        return version >= lower && version.major == lower.major && version.minor == lower.minor;
+    }
+
+    if let Some(rest) = token.strip_prefix(">=") {
+        return parse_semver_triplet(rest).is_some_and(|lower| version >= lower);
+    }
+
+    if let Some(rest) = token.strip_prefix("<=") {
+        return parse_semver_triplet(rest).is_some_and(|upper| version <= upper);
+    }
+
+    if let Some(rest) = token.strip_prefix('>') {
+        return parse_semver_triplet(rest).is_some_and(|lower| version > lower);
+    }
+
+    if let Some(rest) = token.strip_prefix('<') {
+        return parse_semver_triplet(rest).is_some_and(|upper| version < upper);
+    }
+
+    if let Some(rest) = token.strip_prefix('=') {
+        return parse_semver_triplet(rest).is_some_and(|expected| version == expected);
+    }
+
+    parse_semver_triplet(token).is_some_and(|expected| version == expected)
+}
+
 fn check_version_constraint(version: &str, range: &str) -> bool {
     let range = range.trim();
     if range == "*" || range.is_empty() {
         return true;
     }
 
-    let parse = |s: &str| -> Option<(u32, u32, u32)> {
-        let parts: Vec<&str> = s.split('.').collect();
-        if parts.len() < 3 {
-            return None;
-        }
-        let major = parts[0].parse().ok()?;
-        let minor = parts[1].parse().ok()?;
-        let patch_str = parts[2].split(['-', '+']).next()?;
-        let patch = patch_str.parse().ok()?;
-        Some((major, minor, patch))
-    };
-
-    let Some((v_major, v_minor, v_patch)) = parse(version) else {
+    let Some(version) = parse_semver_triplet(version) else {
         return false;
     };
 
-    let is_gte = |r_maj: u32, r_min: u32, r_pat: u32| -> bool {
-        if v_major > r_maj {
-            return true;
-        }
-        if v_major < r_maj {
-            return false;
-        }
-        if v_minor > r_min {
-            return true;
-        }
-        if v_minor < r_min {
-            return false;
-        }
-        v_patch >= r_pat
-    };
-
-    if let Some(rest) = range.strip_prefix('^') {
-        let Some((r_major, r_minor, r_patch)) = parse(rest) else {
-            return false;
-        };
-        if !is_gte(r_major, r_minor, r_patch) {
-            return false;
-        }
-        if r_major == 0 {
-            if r_minor == 0 {
-                return v_major == 0 && v_minor == 0 && v_patch == r_patch;
-            }
-            return v_major == 0 && v_minor == r_minor;
-        }
-        return v_major == r_major;
-    }
-
-    if let Some(rest) = range.strip_prefix('~') {
-        let Some((r_major, r_minor, r_patch)) = parse(rest) else {
-            return false;
-        };
-        return v_major == r_major && v_minor == r_minor && v_patch >= r_patch;
-    }
-
-    if let Some(rest) = range.strip_prefix(">=") {
-        let Some((r_major, r_minor, r_patch)) = parse(rest) else {
-            return false;
-        };
-        return is_gte(r_major, r_minor, r_patch);
-    }
-
-    version == range
+    range
+        .split_whitespace()
+        .all(|token| matches_semver_token(version, token))
 }
 
 impl ExtensionManager {
+    fn record_extension_version(
+        extension_versions: &mut HashMap<String, String>,
+        extension_id: &str,
+        extension_name: &str,
+        version: &str,
+    ) {
+        extension_versions.insert(extension_id.to_string(), version.to_string());
+        if extension_name != extension_id {
+            extension_versions
+                .entry(extension_name.to_string())
+                .or_insert_with(|| version.to_string());
+        }
+    }
+
     /// Default cleanup budget for extension shutdown.
     pub const DEFAULT_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 
@@ -26755,11 +26788,7 @@ impl ExtensionManager {
                 .get(extension_id)
                 .and_then(|by_cap| by_cap.get(capability))
                 .cloned();
-            let extension_version = guard
-                .extensions
-                .iter()
-                .find(|e| e.name == extension_id)
-                .map(|e| e.version.clone());
+            let extension_version = guard.extension_versions.get(extension_id).cloned();
             drop(guard);
             (decision, extension_version)
         };
@@ -26785,10 +26814,9 @@ impl ExtensionManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let version_range = guard
-            .extensions
-            .iter()
-            .find(|e| e.name == extension_id)
-            .map(|e| format!("^{}", e.version));
+            .extension_versions
+            .get(extension_id)
+            .map(|version| format!("^{version}"));
 
         let decision = PersistedDecision {
             capability: capability.to_string(),
@@ -26874,6 +26902,7 @@ impl ExtensionManager {
         let snapshots = runtime.load_js_extensions_snapshots(specs).await?;
 
         let mut payloads = Vec::new();
+        let mut extension_versions = HashMap::new();
         let mut active_tools: Option<Vec<String>> = None;
         let mut all_providers = Vec::new();
         let mut all_flags = Vec::new();
@@ -26908,10 +26937,11 @@ impl ExtensionManager {
             } else {
                 name.clone()
             };
+            Self::record_extension_version(&mut extension_versions, &id, &extension_name, &version);
             all_flags.extend(flags.iter().cloned().map(|mut flag| {
                 if let Some(obj) = flag.as_object_mut() {
                     obj.entry("extension_id".to_string())
-                        .or_insert_with(|| Value::String(extension_name.clone()));
+                        .or_insert_with(|| Value::String(id.clone()));
                 }
                 flag
             }));
@@ -26942,6 +26972,7 @@ impl ExtensionManager {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.extensions = payloads;
+            guard.extension_versions = extension_versions;
             guard.active_tools = active_tools;
             guard.providers = all_providers;
             guard.flags = all_flags;
@@ -26957,10 +26988,10 @@ impl ExtensionManager {
                 guard.hook_bitmap.insert(hook);
             }
             let active_extension_ids = guard
-                .extensions
-                .iter()
-                .map(|ext| ext.name.clone())
-                .collect::<std::collections::HashSet<_>>();
+                .extension_versions
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>();
             guard
                 .runtime_risk_states
                 .retain(|ext_id, _| active_extension_ids.contains(ext_id));
@@ -26980,6 +27011,7 @@ impl ExtensionManager {
 
         let snapshots = runtime.load_native_extensions_snapshots(specs).await?;
         let mut payloads = Vec::new();
+        let mut extension_versions = HashMap::new();
         let mut active_tools: Option<Vec<String>> = None;
         let mut all_providers = Vec::new();
         let mut all_flags = Vec::new();
@@ -27004,10 +27036,11 @@ impl ExtensionManager {
             } else {
                 name.clone()
             };
+            Self::record_extension_version(&mut extension_versions, &id, &extension_name, &version);
             all_flags.extend(flags.iter().cloned().map(|mut flag| {
                 if let Some(obj) = flag.as_object_mut() {
                     obj.entry("extension_id".to_string())
-                        .or_insert_with(|| Value::String(extension_name.clone()));
+                        .or_insert_with(|| Value::String(id.clone()));
                 }
                 flag
             }));
@@ -27039,6 +27072,7 @@ impl ExtensionManager {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.extensions = payloads;
+            guard.extension_versions = extension_versions;
             guard.active_tools = active_tools;
             guard.providers = all_providers;
             guard.flags = all_flags;
@@ -27052,10 +27086,10 @@ impl ExtensionManager {
                 guard.hook_bitmap.insert(hook);
             }
             let active_extension_ids = guard
-                .extensions
-                .iter()
-                .map(|ext| ext.name.clone())
-                .collect::<std::collections::HashSet<_>>();
+                .extension_versions
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>();
             guard
                 .runtime_risk_states
                 .retain(|ext_id, _| active_extension_ids.contains(ext_id));
@@ -27103,6 +27137,11 @@ impl ExtensionManager {
                 .inner
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for registration in &registrations {
+                guard
+                    .extension_versions
+                    .insert(registration.name.clone(), registration.version.clone());
+            }
             guard.extensions.extend(registrations);
             guard.wasm_extensions.extend(wasm_handles);
             drop(guard);
@@ -27194,6 +27233,9 @@ impl ExtensionManager {
         for hook in &payload.event_hooks {
             guard.hook_bitmap.insert(hook.clone());
         }
+        guard
+            .extension_versions
+            .insert(payload.name.clone(), payload.version.clone());
         guard.extensions.push(payload);
         self.refresh_snapshot_with_guard_release(guard);
     }
@@ -27216,6 +27258,9 @@ impl ExtensionManager {
         if let Some(ext) = guard.extensions.first_mut() {
             ext.slash_commands.push(entry);
         } else {
+            guard
+                .extension_versions
+                .insert("__dynamic__".to_string(), "1.0.0".to_string());
             guard.extensions.push(RegisterPayload {
                 name: "__dynamic__".to_string(),
                 version: "1.0.0".to_string(),
@@ -31129,6 +31174,182 @@ mod tests {
             guard.policy_prompt_cache.clear();
         }
         manager
+    }
+
+    #[test]
+    fn check_version_constraint_accepts_compound_range() {
+        assert!(check_version_constraint("2.5.1", ">=2.0.0 <3.0.0"));
+        assert!(!check_version_constraint("3.0.0", ">=2.0.0 <3.0.0"));
+        assert!(check_version_constraint("1.2.4", ">1.2.3 <=2.0.0"));
+        assert!(!check_version_constraint("1.2.3", ">1.2.3 <=2.0.0"));
+    }
+
+    #[test]
+    fn cached_policy_prompt_decision_honors_compound_version_range() {
+        let manager = extension_manager_no_persisted_permissions();
+        {
+            let mut guard = manager
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.extensions.push(RegisterPayload {
+                name: "ext-1".to_string(),
+                version: "2.5.1".to_string(),
+                api_version: "1.0.0".to_string(),
+                capabilities: Vec::new(),
+                capability_manifest: None,
+                tools: Vec::new(),
+                slash_commands: Vec::new(),
+                shortcuts: Vec::new(),
+                flags: Vec::new(),
+                event_hooks: Vec::new(),
+            });
+            guard
+                .extension_versions
+                .insert("ext-1".to_string(), "2.5.1".to_string());
+            guard.policy_prompt_cache.insert(
+                "ext-1".to_string(),
+                HashMap::from([(
+                    "exec".to_string(),
+                    PersistedDecision {
+                        capability: "exec".to_string(),
+                        allow: true,
+                        decided_at: "2026-01-01T00:00:00Z".to_string(),
+                        expires_at: None,
+                        version_range: Some(">=2.0.0 <3.0.0".to_string()),
+                    },
+                )]),
+            );
+        }
+
+        assert_eq!(
+            manager.cached_policy_prompt_decision("ext-1", "exec"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn cached_policy_prompt_decision_uses_runtime_extension_id_for_named_extension() {
+        let manager = extension_manager_no_persisted_permissions();
+        {
+            let mut guard = manager
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.extensions.push(RegisterPayload {
+                name: "Friendly Extension".to_string(),
+                version: "2.5.1".to_string(),
+                api_version: "1.0.0".to_string(),
+                capabilities: Vec::new(),
+                capability_manifest: None,
+                tools: Vec::new(),
+                slash_commands: Vec::new(),
+                shortcuts: Vec::new(),
+                flags: Vec::new(),
+                event_hooks: Vec::new(),
+            });
+            guard
+                .extension_versions
+                .insert("ext.named".to_string(), "2.5.1".to_string());
+            guard.policy_prompt_cache.insert(
+                "ext.named".to_string(),
+                HashMap::from([(
+                    "exec".to_string(),
+                    PersistedDecision {
+                        capability: "exec".to_string(),
+                        allow: true,
+                        decided_at: "2026-01-01T00:00:00Z".to_string(),
+                        expires_at: None,
+                        version_range: Some("^2.5.1".to_string()),
+                    },
+                )]),
+            );
+        }
+
+        assert_eq!(
+            manager.cached_policy_prompt_decision("ext.named", "exec"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn cache_policy_prompt_decision_uses_runtime_extension_id_for_named_extension() {
+        let manager = extension_manager_no_persisted_permissions();
+        {
+            let mut guard = manager
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.extensions.push(RegisterPayload {
+                name: "Friendly Extension".to_string(),
+                version: "2.5.1".to_string(),
+                api_version: "1.0.0".to_string(),
+                capabilities: Vec::new(),
+                capability_manifest: None,
+                tools: Vec::new(),
+                slash_commands: Vec::new(),
+                shortcuts: Vec::new(),
+                flags: Vec::new(),
+                event_hooks: Vec::new(),
+            });
+            guard
+                .extension_versions
+                .insert("ext.named".to_string(), "2.5.1".to_string());
+        }
+
+        manager.cache_policy_prompt_decision("ext.named", "exec", true);
+
+        let decision = manager
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .policy_prompt_cache
+            .get("ext.named")
+            .and_then(|by_cap| by_cap.get("exec"))
+            .expect("cached decision")
+            .clone();
+        assert_eq!(decision.version_range.as_deref(), Some("^2.5.1"));
+    }
+
+    #[test]
+    fn cached_policy_prompt_decision_rejects_out_of_range_version() {
+        let manager = extension_manager_no_persisted_permissions();
+        {
+            let mut guard = manager
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.extensions.push(RegisterPayload {
+                name: "ext-1".to_string(),
+                version: "3.0.0".to_string(),
+                api_version: "1.0.0".to_string(),
+                capabilities: Vec::new(),
+                capability_manifest: None,
+                tools: Vec::new(),
+                slash_commands: Vec::new(),
+                shortcuts: Vec::new(),
+                flags: Vec::new(),
+                event_hooks: Vec::new(),
+            });
+            guard
+                .extension_versions
+                .insert("ext-1".to_string(), "3.0.0".to_string());
+            guard.policy_prompt_cache.insert(
+                "ext-1".to_string(),
+                HashMap::from([(
+                    "exec".to_string(),
+                    PersistedDecision {
+                        capability: "exec".to_string(),
+                        allow: true,
+                        decided_at: "2026-01-01T00:00:00Z".to_string(),
+                        expires_at: None,
+                        version_range: Some(">=2.0.0 <3.0.0".to_string()),
+                    },
+                )]),
+            );
+        }
+
+        assert_eq!(manager.cached_policy_prompt_decision("ext-1", "exec"), None);
     }
 
     #[test]
