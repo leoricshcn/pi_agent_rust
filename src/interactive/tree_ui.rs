@@ -82,7 +82,13 @@ impl PiApp {
 
                         if pending.entries_to_summarize.is_empty() {
                             // Nothing to summarize; switch immediately.
-                            self.start_tree_navigation(pending, TreeSummaryChoice::NoSummary, None);
+                            if !self.start_tree_navigation(
+                                pending,
+                                TreeSummaryChoice::NoSummary,
+                                None,
+                            ) {
+                                self.tree_ui = Some(TreeUiState::Selector(selector));
+                            }
                             return None;
                         }
 
@@ -118,8 +124,10 @@ impl PiApp {
                         let choice = TreeSummaryChoice::all()[prompt.selected];
                         match choice {
                             TreeSummaryChoice::NoSummary | TreeSummaryChoice::Summarize => {
-                                let pending = prompt.pending;
-                                self.start_tree_navigation(pending, choice, None);
+                                let pending = prompt.pending.clone();
+                                if !self.start_tree_navigation(pending, choice, None) {
+                                    self.tree_ui = Some(TreeUiState::SummaryPrompt(prompt));
+                                }
                                 return None;
                             }
                             TreeSummaryChoice::SummarizeWithCustomPrompt => {
@@ -149,17 +157,19 @@ impl PiApp {
                         custom.instructions.pop();
                     }
                     KeyType::Enter => {
-                        let pending = custom.pending;
+                        let pending = custom.pending.clone();
                         let instructions = if custom.instructions.trim().is_empty() {
                             None
                         } else {
-                            Some(custom.instructions)
+                            Some(custom.instructions.clone())
                         };
-                        self.start_tree_navigation(
+                        if !self.start_tree_navigation(
                             pending,
                             TreeSummaryChoice::SummarizeWithCustomPrompt,
                             instructions,
-                        );
+                        ) {
+                            self.tree_ui = Some(TreeUiState::CustomPrompt(custom));
+                        }
                         return None;
                     }
                     KeyType::Runes => {
@@ -227,8 +237,7 @@ impl PiApp {
             summary_from_id: String::new(),
             api_key_present: false,
         };
-        self.start_tree_navigation(pending, TreeSummaryChoice::NoSummary, None);
-        true
+        self.start_tree_navigation(pending, TreeSummaryChoice::NoSummary, None)
     }
 
     /// Open the branch picker if the session has sibling branches.
@@ -296,7 +305,7 @@ impl PiApp {
         pending: PendingTreeNavigation,
         choice: TreeSummaryChoice,
         custom_instructions: Option<String>,
-    ) {
+    ) -> bool {
         let summary_requested = matches!(
             choice,
             TreeSummaryChoice::Summarize | TreeSummaryChoice::SummarizeWithCustomPrompt
@@ -307,13 +316,13 @@ impl PiApp {
         if !summary_requested && self.extensions.is_none() {
             let Ok(mut session_guard) = self.session.try_lock() else {
                 self.status_message = Some("Session busy; try again".to_string());
-                return;
+                return false;
             };
 
             if let Some(target_id) = &pending.new_leaf_id {
                 if !session_guard.navigate_to(target_id) {
                     self.status_message = Some(format!("Branch target not found: {target_id}"));
-                    return;
+                    return false;
                 }
             } else {
                 session_guard.reset_leaf();
@@ -349,7 +358,7 @@ impl PiApp {
             }
             self.input.focus();
 
-            return;
+            return true;
         }
 
         let event_tx = self.event_tx.clone();
@@ -362,7 +371,7 @@ impl PiApp {
         let Ok(agent_guard) = self.agent.try_lock() else {
             self.status_message = Some("Agent busy; try again".to_string());
             self.agent_state = AgentState::Idle;
-            return;
+            return false;
         };
         let provider = agent_guard.provider();
         let key_opt = agent_guard.stream_options().api_key.clone();
@@ -518,5 +527,6 @@ impl PiApp {
                     .await;
             }
         });
+        true
     }
 }

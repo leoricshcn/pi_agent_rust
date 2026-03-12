@@ -4166,6 +4166,43 @@ fn tui_state_slash_tree_select_root_user_message_prefills_editor_and_resets_leaf
 }
 
 #[test]
+fn tui_state_slash_tree_summary_prompt_stays_open_when_agent_busy() {
+    let harness =
+        TestHarness::new("tui_state_slash_tree_summary_prompt_stays_open_when_agent_busy");
+    let mut app = build_app(&harness, Vec::new());
+    log_initial_state(&harness, &app);
+
+    {
+        let session = app.session_handle();
+        let mut session_guard = session.try_lock().expect("session try_lock");
+        session_guard.append_message(SessionMessage::User {
+            content: UserContent::Text("Root".to_string()),
+            timestamp: Some(0),
+        });
+        session_guard.append_message(SessionMessage::User {
+            content: UserContent::Text("Child".to_string()),
+            timestamp: Some(0),
+        });
+    }
+
+    type_text(&harness, &mut app, "/tree");
+    press_enter(&harness, &mut app);
+    press_up(&harness, &mut app);
+    let step = press_enter(&harness, &mut app);
+    assert_after_contains(&harness, &step, "Branch Summary");
+
+    press_down(&harness, &mut app);
+
+    let agent_handle = app.agent_handle();
+    let _guard = agent_handle.try_lock().expect("agent lock");
+
+    let step = press_enter(&harness, &mut app);
+
+    assert_eq!(app.status_message(), Some("Agent busy; try again"));
+    assert_after_contains(&harness, &step, "Branch Summary");
+}
+
+#[test]
 fn tui_state_slash_fork_creates_session_and_prefills_editor() {
     let harness = TestHarness::new("tui_state_slash_fork_creates_session_and_prefills_editor");
     let base_dir = harness.temp_path("sessions");
@@ -5233,6 +5270,39 @@ fn tui_grad_branch_picker_enter_while_session_busy_keeps_picker_open() {
     assert!(
         app.has_branch_picker(),
         "Picker should remain open when branch switch cannot start"
+    );
+}
+
+#[test]
+fn tui_grad_branch_picker_enter_while_agent_busy_keeps_picker_open() {
+    let harness =
+        TestHarness::new("tui_grad_branch_picker_enter_while_agent_busy_keeps_picker_open");
+    let (session, _, _, _) = create_two_branch_session();
+    let extension_source = r#"
+export default function init(pi) {}
+"#;
+    let (mut app, _rx) = build_app_with_session_and_events_and_extension(
+        &harness,
+        Vec::new(),
+        session,
+        Config::default(),
+        extension_source,
+    );
+    log_initial_state(&harness, &app);
+
+    app.open_branch_picker();
+    assert!(app.has_branch_picker());
+    app.handle_branch_picker_key(&KeyMsg::from_type(KeyType::Down));
+
+    let agent_handle = app.agent_handle();
+    let _guard = agent_handle.try_lock().expect("agent lock");
+
+    app.handle_branch_picker_key(&KeyMsg::from_type(KeyType::Enter));
+
+    assert_eq!(app.status_message(), Some("Agent busy; try again"));
+    assert!(
+        app.has_branch_picker(),
+        "Picker should remain open when navigation cannot start"
     );
 }
 

@@ -2205,6 +2205,11 @@ impl PiApp {
         Arc::clone(&self.session)
     }
 
+    #[must_use]
+    pub fn agent_handle(&self) -> Arc<Mutex<Agent>> {
+        Arc::clone(&self.agent)
+    }
+
     /// Get the current status message (for testing).
     pub fn status_message(&self) -> Option<&str> {
         self.status_message.as_deref()
@@ -2337,10 +2342,10 @@ impl PiApp {
         self.run_memory_pressure_actions();
 
         // Handle our custom Pi messages (take ownership to avoid per-token clone).
-        if msg.downcast_ref::<PiMsg>().is_some() {
-            let pi_msg = msg.downcast::<PiMsg>().unwrap();
-            return self.handle_pi_message(pi_msg);
-        }
+        let msg = match msg.downcast::<PiMsg>() {
+            Ok(pi_msg) => return self.handle_pi_message(pi_msg),
+            Err(msg) => msg,
+        };
 
         if let Some(size) = msg.downcast_ref::<WindowSizeMsg>() {
             self.set_terminal_size(size.width as usize, size.height as usize);
