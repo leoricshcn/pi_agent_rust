@@ -2831,7 +2831,9 @@ fn load_session_meta_jsonl(path: &Path) -> Result<SessionPickEntry> {
     let mut message_count = 0u64;
     let mut name = None;
 
-    for line_content in lines.map_while(std::result::Result::ok) {
+    for line_content in lines {
+        let line_content = line_content
+            .map_err(|e| Error::session(format!("Failed to read session entry: {e}")))?;
         if let Ok(entry) = serde_json::from_str::<PartialEntry>(&line_content) {
             match entry.r#type.as_str() {
                 "message" => message_count += 1,
@@ -6945,6 +6947,44 @@ mod tests {
         assert_eq!(scanned[0].path, path);
         assert_eq!(scanned[0].message_count, 2);
         assert_eq!(scanned[0].size_bytes, disk_size);
+    }
+
+    #[test]
+    fn test_load_session_meta_jsonl_errors_on_invalid_utf8_entry_line() {
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().unwrap();
+        let session_path = temp.path().join("invalid-utf8.jsonl");
+
+        let mut header = SessionHeader::new();
+        header.id = "invalid-utf8".to_string();
+        header.cwd = temp.path().display().to_string();
+        header.timestamp = "2025-06-01T12:00:00.000Z".to_string();
+
+        std::fs::write(
+            &session_path,
+            format!(
+                "{}\n",
+                serde_json::to_string(&header).expect("serialize header")
+            ),
+        )
+        .expect("write header");
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&session_path)
+            .expect("open session");
+        file.write_all(b"{\"type\":\"message\"}\n")
+            .expect("write valid entry");
+        file.write_all(b"\xFF\xFE\n").expect("write invalid utf8");
+        file.flush().expect("flush session");
+        drop(file);
+
+        let err = load_session_meta_jsonl(&session_path).expect_err("invalid utf8 should error");
+        assert!(
+            err.to_string().contains("Failed to read session entry"),
+            "{err}"
+        );
     }
 
     #[cfg(feature = "sqlite-sessions")]
