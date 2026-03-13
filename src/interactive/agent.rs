@@ -1302,8 +1302,9 @@ impl PiApp {
             drop(session_guard);
 
             if let Some(err) = save_error {
-                let _ = crate::interactive::enqueue_pi_event_current(
+                let _ = crate::interactive::enqueue_pi_event(
                     &event_tx,
+                    &Cx::for_request(),
                     PiMsg::AgentError(err),
                 )
                 .await;
@@ -1311,8 +1312,9 @@ impl PiApp {
 
             if let Err(err) = result {
                 let formatted = crate::error_hints::format_error_with_hints(&err);
-                let _ = crate::interactive::enqueue_pi_event_current(
+                let _ = crate::interactive::enqueue_pi_event(
                     &event_tx,
+                    &Cx::for_request(),
                     PiMsg::AgentError(formatted),
                 )
                 .await;
@@ -1494,8 +1496,9 @@ impl PiApp {
             drop(session_guard);
 
             if let Some(err) = save_error {
-                let _ = crate::interactive::enqueue_pi_event_current(
+                let _ = crate::interactive::enqueue_pi_event(
                     &event_tx,
+                    &Cx::for_request(),
                     PiMsg::AgentError(err),
                 )
                 .await;
@@ -1503,8 +1506,9 @@ impl PiApp {
 
             if let Err(err) = result {
                 let formatted = crate::error_hints::format_error_with_hints(&err);
-                let _ = crate::interactive::enqueue_pi_event_current(
+                let _ = crate::interactive::enqueue_pi_event(
                     &event_tx,
+                    &Cx::for_request(),
                     PiMsg::AgentError(formatted),
                 )
                 .await;
@@ -1784,16 +1788,18 @@ impl PiApp {
             drop(session_guard);
 
             if let Some(err) = save_error {
-                let _ = crate::interactive::enqueue_pi_event_current(
+                let _ = crate::interactive::enqueue_pi_event(
                     &event_tx,
+                    &Cx::for_request(),
                     PiMsg::AgentError(err),
                 )
                 .await;
             }
 
             if let Err(err) = result {
-                let _ = crate::interactive::enqueue_pi_event_current(
+                let _ = crate::interactive::enqueue_pi_event(
                     &event_tx,
+                    &Cx::for_request(),
                     PiMsg::AgentError(err.to_string()),
                 )
                 .await;
