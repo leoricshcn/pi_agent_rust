@@ -1976,15 +1976,13 @@ result in account suspension/ban. Prefer using an Anthropic API key (ANTHROPIC_A
                         // Block until the callback arrives or the sender is dropped.
                         if let Ok(path) = server.rx.recv() {
                             let full_url = format!("http://localhost{path}");
-                            let mut msg = PiMsg::OAuthCallbackReceived(full_url);
-                            loop {
-                                match event_tx.try_send(msg) {
-                                    Err(asupersync::channel::mpsc::SendError::Full(unsent)) => {
-                                        msg = unsent;
-                                        std::thread::sleep(std::time::Duration::from_millis(50));
-                                    }
-                                    Ok(()) | Err(_) => break,
-                                }
+                            let mut send_result =
+                                event_tx.try_send(PiMsg::OAuthCallbackReceived(full_url));
+                            while let Err(asupersync::channel::mpsc::SendError::Full(unsent)) =
+                                send_result
+                            {
+                                std::thread::sleep(std::time::Duration::from_millis(50));
+                                send_result = event_tx.try_send(unsent);
                             }
                         }
                     });
