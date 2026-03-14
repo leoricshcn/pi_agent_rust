@@ -4358,6 +4358,8 @@ fn migration_status_can_rebuild_index(error: &Error) -> bool {
 /// cleans up. Returns the verification result so callers can inspect
 /// entry counts and integrity before committing.
 pub fn migrate_dry_run(jsonl_path: &Path) -> Result<session_store_v2::MigrationVerification> {
+    use std::io::BufRead;
+
     let tmp_dir =
         tempfile::tempdir().map_err(|e| crate::Error::session(format!("tempdir: {e}")))?;
     let tmp_v2_root = tmp_dir.path().join("dry_run.v2");
@@ -4365,10 +4367,13 @@ pub fn migrate_dry_run(jsonl_path: &Path) -> Result<session_store_v2::MigrationV
     // Parse JSONL and populate a temporary V2 store.
     let file = std::fs::File::open(jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
     let mut reader = std::io::BufReader::new(file);
-    use std::io::BufRead;
 
     let mut header_line = String::new();
-    if reader.read_line(&mut header_line).map_err(|e| crate::Error::Io(Box::new(e)))? == 0 {
+    if reader
+        .read_line(&mut header_line)
+        .map_err(|e| crate::Error::Io(Box::new(e)))?
+        == 0
+    {
         return Err(crate::Error::session("Empty JSONL session file"));
     }
 
@@ -4379,11 +4384,13 @@ pub fn migrate_dry_run(jsonl_path: &Path) -> Result<session_store_v2::MigrationV
     })?;
 
     let mut store = SessionStoreV2::create(&tmp_v2_root, 64 * 1024 * 1024)?;
-    
+
     let mut line = String::new();
     loop {
         line.clear();
-        let bytes_read = reader.read_line(&mut line).map_err(|e| crate::Error::Io(Box::new(e)))?;
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|e| crate::Error::Io(Box::new(e)))?;
         if bytes_read == 0 {
             break;
         }
@@ -4432,18 +4439,25 @@ pub fn recover_partial_migration(
 }
 
 fn jsonl_has_entry_lines(jsonl_path: &Path) -> Result<bool> {
+    use std::io::BufRead;
+
     let file = std::fs::File::open(jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
     let mut reader = std::io::BufReader::new(file);
-    use std::io::BufRead;
-    
+
     let mut line = String::new();
-    if reader.read_line(&mut line).map_err(|e| crate::Error::Io(Box::new(e)))? == 0 {
+    if reader
+        .read_line(&mut line)
+        .map_err(|e| crate::Error::Io(Box::new(e)))?
+        == 0
+    {
         return Err(crate::Error::session("Empty JSONL session file"));
     }
-    
+
     loop {
         line.clear();
-        let bytes_read = reader.read_line(&mut line).map_err(|e| crate::Error::Io(Box::new(e)))?;
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|e| crate::Error::Io(Box::new(e)))?;
         if bytes_read == 0 {
             return Ok(false);
         }

@@ -1979,12 +1979,11 @@ result in account suspension/ban. Prefer using an Anthropic API key (ANTHROPIC_A
                             let mut msg = PiMsg::OAuthCallbackReceived(full_url);
                             loop {
                                 match event_tx.try_send(msg) {
-                                    Ok(()) => break,
                                     Err(asupersync::channel::mpsc::SendError::Full(unsent)) => {
                                         msg = unsent;
                                         std::thread::sleep(std::time::Duration::from_millis(50));
                                     }
-                                    Err(_) => break,
+                                    Ok(()) | Err(_) => break,
                                 }
                             }
                         }

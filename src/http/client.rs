@@ -566,6 +566,9 @@ fn build_request_bytes(
             || clean_name.eq_ignore_ascii_case("host")
             || clean_name.eq_ignore_ascii_case("user-agent")
             || clean_name.eq_ignore_ascii_case("content-length")
+            // This client only emits fixed-length request bodies, so
+            // caller-supplied transfer codings would lie about the wire format.
+            || clean_name.eq_ignore_ascii_case("transfer-encoding")
         {
             continue;
         }
@@ -1985,6 +1988,18 @@ mod tests {
         assert!(!text.contains("Host: evil.example\r\n"));
         assert!(!text.contains("Content-Length: 999\r\n"));
         assert!(!text.contains("User-Agent: spoofed\r\n"));
+    }
+
+    #[test]
+    fn build_request_bytes_drops_transfer_encoding_header() {
+        let parsed = ParsedUrl::parse("http://example.com/test").unwrap();
+        let headers = vec![("Transfer-Encoding".to_string(), "chunked".to_string())];
+        let body = b"hello";
+        let bytes = build_request_bytes(Method::Post, &parsed, "agent", &headers, body);
+        let text = String::from_utf8(bytes).unwrap();
+
+        assert!(text.contains("Content-Length: 5\r\n"));
+        assert!(!text.contains("Transfer-Encoding: chunked\r\n"));
     }
 
     // ── Response body size limit ──────────────────────────────────────

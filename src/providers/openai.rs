@@ -1754,7 +1754,7 @@ mod tests {
                     {
                         break;
                     }
-                    Err(err) => panic!(),
+                    Err(err) => panic!("read error: {err}"),
                 }
             }
 
@@ -1780,7 +1780,7 @@ mod tests {
                     {
                         break;
                     }
-                    Err(err) => panic!(),
+                    Err(err) => panic!("read error: {err}"),
                 }
             }
 
