@@ -495,9 +495,36 @@ async fn connect_transport(parsed: &ParsedUrl, client: &Client) -> Result<Transp
     }
 }
 
-/// Strip CR/LF from header names and values to prevent HTTP header injection.
+/// Strip CR/LF from header values to prevent HTTP header injection.
 fn sanitize_header_value(value: &str) -> String {
     value.chars().filter(|&c| c != '\r' && c != '\n').collect()
+}
+
+/// Preserve only RFC 9110 token characters in outbound header names.
+fn sanitize_header_name(name: &str) -> String {
+    name.bytes()
+        .filter(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    *b,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+        .map(char::from)
+        .collect()
 }
 
 fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -534,13 +561,14 @@ fn build_request_bytes(
         std::fmt::Write::write_fmt(&mut out, format_args!("Content-Length: {}\r\n", body.len()));
 
     for (name, value) in headers {
-        if name.eq_ignore_ascii_case("host")
-            || name.eq_ignore_ascii_case("user-agent")
-            || name.eq_ignore_ascii_case("content-length")
+        let clean_name = sanitize_header_name(name);
+        if clean_name.is_empty()
+            || clean_name.eq_ignore_ascii_case("host")
+            || clean_name.eq_ignore_ascii_case("user-agent")
+            || clean_name.eq_ignore_ascii_case("content-length")
         {
             continue;
         }
-        let clean_name = sanitize_header_value(name);
         let clean_value = sanitize_header_value(value);
         let _ =
             std::fmt::Write::write_fmt(&mut out, format_args!("{clean_name}: {clean_value}\r\n"));
@@ -1927,6 +1955,36 @@ mod tests {
         assert!(text.contains("X-InjectedEvil: valueX-Bad: smuggled\r\n"));
         // The smuggled header must NOT appear as a separate line
         assert!(!text.contains("\r\nX-Bad: smuggled\r\n"));
+    }
+
+    #[test]
+    fn build_request_bytes_strips_invalid_chars_from_header_names() {
+        let parsed = ParsedUrl::parse("http://example.com/test").unwrap();
+        let headers = vec![("X:Injected Header".to_string(), "value".to_string())];
+        let bytes = build_request_bytes(Method::Get, &parsed, "agent", &headers, &[]);
+        let text = String::from_utf8(bytes).unwrap();
+
+        assert!(text.contains("XInjectedHeader: value\r\n"));
+        assert!(!text.contains("X:Injected Header: value\r\n"));
+    }
+
+    #[test]
+    fn build_request_bytes_drops_headers_that_normalize_to_reserved_names() {
+        let parsed = ParsedUrl::parse("http://example.com/test").unwrap();
+        let headers = vec![
+            ("Host:".to_string(), "evil.example".to_string()),
+            ("Content-Length ".to_string(), "999".to_string()),
+            ("User-Agent:".to_string(), "spoofed".to_string()),
+        ];
+        let bytes = build_request_bytes(Method::Get, &parsed, "agent", &headers, &[]);
+        let text = String::from_utf8(bytes).unwrap();
+
+        assert!(text.contains("Host: example.com\r\n"));
+        assert!(text.contains("User-Agent: agent\r\n"));
+        assert!(text.contains("Content-Length: 0\r\n"));
+        assert!(!text.contains("Host: evil.example\r\n"));
+        assert!(!text.contains("Content-Length: 999\r\n"));
+        assert!(!text.contains("User-Agent: spoofed\r\n"));
     }
 
     // ── Response body size limit ──────────────────────────────────────
