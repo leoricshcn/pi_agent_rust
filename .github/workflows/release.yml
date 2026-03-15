@@ -137,7 +137,6 @@ jobs:
           path: pi_agent_rust
           fetch-depth: 0
           ref: ${{ needs.plan.outputs.tag }}
-          submodules: false
 
       - name: Ensure submodule content exists
         run: |
