@@ -1131,16 +1131,16 @@ impl KeyBindings {
         path: &Path,
         warnings: &mut Vec<KeyBindingsWarning>,
     ) -> Option<AppAction> {
-        match serde_json::from_value(serde_json::Value::String(action_str.clone())) {
-            Ok(action) => Some(action),
-            Err(_) => {
+        serde_json::from_value(serde_json::Value::String(action_str.clone())).map_or_else(
+            |_| {
                 warnings.push(KeyBindingsWarning::UnknownAction {
                     action: action_str,
                     path: path.to_path_buf(),
                 });
                 None
-            }
-        }
+            },
+            Some,
+        )
     }
 
     fn parse_override_value(
