@@ -8826,11 +8826,11 @@ function __wrapExecLike(commandForError, child, opts, callback) {
   let stdoutChunks = [];
   let stderrChunks = [];
   let callbackDone = false;
-  const finish = (err) => {
+  const finish = (err, outStr, errOutStr) => {
     if (callbackDone) return;
     callbackDone = true;
-    const out = stdoutChunks.join("");
-    const errOut = stderrChunks.join("");
+    const out = outStr !== undefined ? outStr : stdoutChunks.join("");
+    const errOut = errOutStr !== undefined ? errOutStr : stderrChunks.join("");
     if (typeof callback === "function") {
       callback(err, out, errOut);
     }
@@ -8852,8 +8852,8 @@ function __wrapExecLike(commandForError, child, opts, callback) {
   });
 
   child.on("close", (code) => {
-    let out = stdout;
-    let errOut = stderr;
+    let out = stdoutChunks.join("");
+    let errOut = stderrChunks.join("");
 
     if (out.length > opts.maxBuffer) {
       const err = new Error("stdout maxBuffer length exceeded");
