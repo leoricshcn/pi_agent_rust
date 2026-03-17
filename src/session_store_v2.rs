@@ -1112,8 +1112,23 @@ impl SessionStoreV2 {
                             f.write_all(b"\n")?;
                             line.push('\n');
                             line_len += 1;
-                            // Consume the newline from the reader so it isn't double-counted
-                            let _ = reader.read_exact(&mut [0u8; 1]);
+                            // Consume the healed newline so the reader and offset accounting stay aligned.
+                            let mut healed_newline = [0u8; 1];
+                            reader.read_exact(&mut healed_newline).map_err(|err| {
+                                Error::session(format!(
+                                    "failed to consume healed newline while rebuilding index: \
+                                     segment={} line={line_number}: {err}",
+                                    seg_path.display()
+                                ))
+                            })?;
+                            if healed_newline[0] != b'\n' {
+                                return Err(Error::session(format!(
+                                    "healed newline read back as non-newline byte while rebuilding index: \
+                                     segment={} line={line_number}: 0x{:02X}",
+                                    seg_path.display(),
+                                    healed_newline[0]
+                                )));
+                            }
                         }
                         frame
                     }

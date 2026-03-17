@@ -325,6 +325,49 @@ fn create_recovers_when_final_frame_has_no_trailing_newline() -> PiResult<()> {
 }
 
 #[test]
+fn rebuild_index_recovers_when_final_frame_has_no_trailing_newline_and_allows_append()
+-> PiResult<()> {
+    let dir = tempdir()?;
+    let mut store = SessionStoreV2::create(dir.path(), 4 * 1024)?;
+    let mut expected_ids = append_linear_entries(&mut store, 4)?;
+
+    let seg_path = store.segment_file_path(1);
+    let original_len = fs::metadata(&seg_path)?.len();
+    assert!(original_len > 0, "segment file must be non-empty");
+    let bytes = fs::read(&seg_path)?;
+    assert!(
+        bytes.last() == Some(&b'\n'),
+        "expected segment file to end with newline"
+    );
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&seg_path)?
+        .set_len(original_len.saturating_sub(1))?;
+
+    fs::remove_file(store.index_file_path())?;
+
+    let rebuilt = store.rebuild_index()?;
+    assert_eq!(rebuilt, 4);
+    store.validate_integrity()?;
+    assert_eq!(store.entry_count(), 4);
+    assert_eq!(frame_ids(&store.read_all_entries()?), expected_ids);
+
+    let next_id = "entry_00000005".to_string();
+    store.append_entry(
+        next_id.clone(),
+        expected_ids.last().cloned(),
+        "message",
+        json!({"kind":"message","ordinal":5}),
+    )?;
+    expected_ids.push(next_id);
+
+    store.validate_integrity()?;
+    assert_eq!(store.entry_count(), 5);
+    assert_eq!(frame_ids(&store.read_all_entries()?), expected_ids);
+    Ok(())
+}
+
+#[test]
 fn create_fails_closed_when_non_eof_segment_frame_is_corrupt() -> PiResult<()> {
     let dir = tempdir()?;
     let mut store = SessionStoreV2::create(dir.path(), 4 * 1024)?;
