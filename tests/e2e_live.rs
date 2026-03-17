@@ -639,11 +639,11 @@ fn resolve_azure_runtime_config(config: &LiveProviderConfig) -> Result<AzureRunt
         })?;
 
     let deployment = optional_env("AZURE_OPENAI_DEPLOYMENT")
+        .or(base_deployment)
         .or_else(|| {
             let deployment = config.model_id.trim();
             (!deployment.is_empty()).then(|| deployment.to_string())
         })
-        .or(base_deployment)
         .ok_or_else(|| {
             format!(
                 "missing Azure deployment: set AZURE_OPENAI_DEPLOYMENT or configure model_id/base_url (model_id='{}', base_url='{}')",
@@ -668,6 +668,23 @@ fn parse_azure_base_url_details_supports_cognitive_services_host() {
     assert_eq!(resource.as_deref(), Some("myresource"));
     assert_eq!(deployment.as_deref(), Some("deploy-123"));
     assert_eq!(api_version.as_deref(), Some("2024-10-21"));
+}
+
+#[test]
+fn resolve_azure_runtime_config_prefers_base_url_deployment_over_model_id() {
+    let config = LiveProviderConfig {
+        provider: "azure-openai".to_string(),
+        model_id: "model-fallback".to_string(),
+        api: "openai-completions".to_string(),
+        base_url: "https://myresource.openai.azure.com/openai/deployments/base-deploy/chat/completions?api-version=2024-10-21".to_string(),
+        api_key: "test-key".to_string(),
+        auth_source: "env:AZURE_OPENAI_API_KEY".to_string(),
+    };
+
+    let runtime = resolve_azure_runtime_config(&config).expect("resolve azure runtime config");
+    assert_eq!(runtime.resource, "myresource");
+    assert_eq!(runtime.deployment, "base-deploy");
+    assert_eq!(runtime.api_version.as_deref(), Some("2024-10-21"));
 }
 
 // ---------------------------------------------------------------------------

@@ -394,8 +394,8 @@ where
         (!model_id.is_empty()).then(|| model_id.to_string())
     };
     let deployment = env_deployment
-        .or(model_deployment)
         .or(base_deployment)
+        .or(model_deployment)
         .ok_or_else(|| {
             Error::config(format!(
                 "Unable to resolve Azure deployment for provider '{}'; set {AZURE_OPENAI_DEPLOYMENT_ENV}, provide a non-empty model id, or include '/deployments/<name>' in base_url ('{base_url}')",
@@ -2018,11 +2018,33 @@ export default function init(pi) {
         let runtime =
             resolve_azure_provider_runtime_with_env(&entry, |_| None).expect("resolve runtime");
         assert_eq!(runtime.resource, "myresource");
-        assert_eq!(runtime.deployment, "gpt-4o-mini");
+        assert_eq!(runtime.deployment, "custom");
         assert_eq!(runtime.api_version, "2024-10-21");
         assert_eq!(
             runtime.endpoint_url,
-            "https://myresource.cognitiveservices.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2024-10-21"
+            "https://myresource.cognitiveservices.azure.com/openai/deployments/custom/chat/completions?api-version=2024-10-21"
+        );
+    }
+
+    #[test]
+    fn resolve_azure_provider_runtime_env_deployment_overrides_base_url_and_model_id() {
+        let entry = model_entry(
+            "azure-openai",
+            "openai-completions",
+            "model-fallback",
+            "https://myresource.openai.azure.com/openai/deployments/base-deploy/chat/completions?api-version=2024-10-21",
+        );
+        let runtime = resolve_azure_provider_runtime_with_env(&entry, |name| match name {
+            AZURE_OPENAI_DEPLOYMENT_ENV => Some("env-deploy".to_string()),
+            _ => None,
+        })
+        .expect("resolve runtime");
+        assert_eq!(runtime.resource, "myresource");
+        assert_eq!(runtime.deployment, "env-deploy");
+        assert_eq!(runtime.api_version, "2024-10-21");
+        assert_eq!(
+            runtime.endpoint_url,
+            "https://myresource.openai.azure.com/openai/deployments/env-deploy/chat/completions?api-version=2024-10-21"
         );
     }
 
