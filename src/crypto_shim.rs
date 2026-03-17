@@ -158,6 +158,12 @@ fn register_random_bytes_hostcall(global: &rquickjs::Object<'_>) -> rquickjs::Re
     global.set(
         "__pi_crypto_random_bytes_native",
         Func::from(|size: usize| -> rquickjs::Result<String> {
+            if size > 10 * 1024 * 1024 {
+                return Err(rquickjs::Error::new_from_js(
+                    "number",
+                    "randomBytes size limit exceeded (max 10MB)",
+                ));
+            }
             let bytes = random_bytes(size).map_err(|err| map_entropy_error("randomBytes", err))?;
             Ok(hex_lower(&bytes))
         }),

@@ -14489,6 +14489,12 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                     "__pi_crypto_random_bytes_native",
                     Func::from(
                         move |_ctx: Ctx<'_>, len: usize| -> rquickjs::Result<Vec<u8>> {
+                            if len > 10 * 1024 * 1024 {
+                                return Err(rquickjs::Error::new_from_js(
+                                    "number",
+                                    "randomBytes size limit exceeded (max 10MB)",
+                                ));
+                            }
                             tracing::debug!(
                                 event = "pijs.crypto.random_bytes",
                                 len,

@@ -181,7 +181,7 @@ fn resolve_extension_command(
 }
 
 fn rpc_agent_event_handler(
-    out_tx: std::sync::mpsc::Sender<String>,
+    out_tx: std::sync::mpsc::SyncSender<String>,
     runtime_handle: RuntimeHandle,
     extensions: Option<ExtensionManager>,
 ) -> impl Fn(AgentEvent) + Send + Sync + 'static {
@@ -338,7 +338,7 @@ struct RpcUiBridgeState {
 
 pub async fn run_stdio(session: AgentSession, options: RpcOptions) -> Result<()> {
     let (in_tx, in_rx) = mpsc::channel::<String>(1024);
-    let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+    let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
 
     std::thread::spawn(move || {
         let stdin = io::stdin();
@@ -388,7 +388,7 @@ pub async fn run(
     session: AgentSession,
     options: RpcOptions,
     in_rx: mpsc::Receiver<String>,
-    out_tx: std::sync::mpsc::Sender<String>,
+    out_tx: std::sync::mpsc::SyncSender<String>,
 ) -> Result<()> {
     let cx = AgentCx::for_current_or_request();
     let _current = asupersync::Cx::set_current(Some(cx.cx().clone()));
@@ -1930,7 +1930,7 @@ async fn run_prompt_with_retry(
     is_streaming: Arc<AtomicBool>,
     is_compacting: Arc<AtomicBool>,
     abort_handle_slot: Arc<Mutex<Option<AbortHandle>>>,
-    out_tx: std::sync::mpsc::Sender<String>,
+    out_tx: std::sync::mpsc::SyncSender<String>,
     retry_abort: Arc<AtomicBool>,
     options: RpcOptions,
     message: String,
@@ -2139,7 +2139,7 @@ async fn run_extension_command(
     session: Arc<Mutex<AgentSession>>,
     is_streaming: Arc<AtomicBool>,
     abort_handle_slot: Arc<Mutex<Option<AbortHandle>>>,
-    out_tx: std::sync::mpsc::Sender<String>,
+    out_tx: std::sync::mpsc::SyncSender<String>,
     runtime_handle: RuntimeHandle,
     command_name: String,
     args: String,
@@ -2258,7 +2258,7 @@ fn rpc_emit_extension_ui_request(
     runtime_handle: &RuntimeHandle,
     ui_state: Arc<Mutex<RpcUiBridgeState>>,
     manager: ExtensionManager,
-    out_tx_ui: std::sync::mpsc::Sender<String>,
+    out_tx_ui: std::sync::mpsc::SyncSender<String>,
     request: ExtensionUiRequest,
 ) {
     // Emit the UI request as a JSON notification to the client.
@@ -2918,7 +2918,7 @@ mod retry_tests {
             let is_compacting = Arc::new(AtomicBool::new(false));
             let abort_handle_slot: Arc<Mutex<Option<AbortHandle>>> = Arc::new(Mutex::new(None));
             let retry_abort = Arc::new(AtomicBool::new(false));
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
 
             let auth_path = tempfile::tempdir()
                 .expect("tempdir")
@@ -3019,7 +3019,7 @@ mod retry_tests {
             let is_compacting = Arc::new(AtomicBool::new(false));
             let abort_handle_slot: Arc<Mutex<Option<AbortHandle>>> = Arc::new(Mutex::new(None));
             let retry_abort = Arc::new(AtomicBool::new(false));
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
 
             let auth_path = tempfile::tempdir()
                 .expect("tempdir")
@@ -3140,7 +3140,7 @@ mod retry_tests {
             let is_compacting = Arc::new(AtomicBool::new(false));
             let abort_handle_slot: Arc<Mutex<Option<AbortHandle>>> = Arc::new(Mutex::new(None));
             let retry_abort = Arc::new(AtomicBool::new(false));
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
 
             let auth_path = tempfile::tempdir()
                 .expect("tempdir")
@@ -3265,7 +3265,7 @@ mod retry_tests {
             };
 
             let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
             let out_rx = Arc::new(std::sync::Mutex::new(out_rx));
 
             let ambient_cx = asupersync::Cx::for_testing();
@@ -3526,7 +3526,7 @@ async fn maybe_auto_compact(
     session: Arc<Mutex<AgentSession>>,
     options: RpcOptions,
     is_compacting: Arc<AtomicBool>,
-    out_tx: std::sync::mpsc::Sender<String>,
+    out_tx: std::sync::mpsc::SyncSender<String>,
 ) {
     let cx = AgentCx::for_current_or_request();
     let (path_entries, context_window, reserve_tokens, settings) = {
@@ -5542,7 +5542,7 @@ export default function init(pi) {
 
             let options = build_test_rpc_options(&handle, cwd.join("auth.json"));
             let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
             let out_rx = Arc::new(Mutex::new(out_rx));
 
             let server =
@@ -5615,7 +5615,7 @@ export default function init(pi) {
 
             let options = build_test_rpc_options(&handle, cwd.join("auth.json"));
             let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
             let out_rx = Arc::new(Mutex::new(out_rx));
 
             let server =
@@ -5678,7 +5678,7 @@ export default function init(pi) {
             let cwd = temp.path().to_path_buf();
             let (agent_session, options) = build_queue_state_rpc_fixture(&handle, &cwd).await;
             let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
             let out_rx = Arc::new(Mutex::new(out_rx));
 
             let server =
@@ -5729,7 +5729,7 @@ export default function init(pi) {
             let cwd = temp.path().to_path_buf();
             let (agent_session, options) = build_queue_state_rpc_fixture(&handle, &cwd).await;
             let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
             let out_rx = Arc::new(Mutex::new(out_rx));
 
             let server =
@@ -5766,7 +5766,7 @@ export default function init(pi) {
             let cwd = temp.path().to_path_buf();
             let (agent_session, options) = build_queue_state_rpc_fixture(&handle, &cwd).await;
             let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
             let out_rx = Arc::new(Mutex::new(out_rx));
 
             let server =
@@ -5816,7 +5816,7 @@ export default function init(pi) {
             options.config.follow_up_mode = Some("all".to_string());
 
             let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
             let out_rx = Arc::new(Mutex::new(out_rx));
 
             let server =
@@ -6794,7 +6794,7 @@ export default function init(pi) {
             let agent_session = build_test_agent_session(Session::in_memory());
             let session_handle = Arc::clone(&agent_session.session);
             let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(8);
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
             let out_rx = Arc::new(Mutex::new(out_rx));
 
             let server =
@@ -6854,7 +6854,7 @@ export default function init(pi) {
             let options = build_test_rpc_options(&runtime_handle, auth_path);
 
             let (in_tx, in_rx) = asupersync::channel::mpsc::channel::<String>(16);
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+            let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
             let out_rx = Arc::new(Mutex::new(out_rx));
 
             let expected_deadline = asupersync::time::wall_now() + Duration::from_secs(30);
