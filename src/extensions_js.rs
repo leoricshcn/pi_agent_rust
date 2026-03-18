@@ -9366,9 +9366,16 @@ const __pi_vfs = (() => {
     const normalized = String(encoding).toLowerCase();
     if (normalized === "base64") {
       let bin = "";
-      const CHUNK_SIZE = 8192;
-      for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK_SIZE));
+      let chunk = [];
+      for (let i = 0; i < bytes.length; i++) {
+        chunk.push(bytes[i]);
+        if (chunk.length >= 4096) {
+          bin += String.fromCharCode.apply(null, chunk);
+          chunk.length = 0;
+        }
+      }
+      if (chunk.length > 0) {
+        bin += String.fromCharCode.apply(null, chunk);
       }
       return btoa(bin);
     }
@@ -10080,9 +10087,19 @@ export function createWriteStream(path, opts) {
     final(callback) {
       try {
         if (appendMode) {
+          const resolved = __pi_vfs.resolvePath(path, true);
+          __pi_vfs.checkWriteAccess(resolved);
+          const current = __pi_vfs.files.get(resolved) || new Uint8Array();
+          const totalSize = current.byteLength + bufferedChunks.reduce((sum, bytes) => sum + bytes.byteLength, 0);
+          const merged = new Uint8Array(totalSize);
+          merged.set(current, 0);
+          let offset = current.byteLength;
           for (const bytes of bufferedChunks) {
-            appendFileSync(path, bytes);
+            merged.set(bytes, offset);
+            offset += bytes.byteLength;
           }
+          __pi_vfs.ensureDir(__pi_vfs.dirname(resolved));
+          __pi_vfs.files.set(resolved, merged);
         } else {
           const totalSize = bufferedChunks.reduce((sum, bytes) => sum + bytes.byteLength, 0);
           const merged = new Uint8Array(totalSize);
@@ -17359,7 +17376,7 @@ if (typeof globalThis.TextDecoder === 'undefined') {
             let out = '';
             let chunk = [];
             for (let i = 0; i < bytes.length; ) {
-                if (chunk.length >= 8192) {
+                if (chunk.length >= 4096) {
                     out += String.fromCharCode.apply(null, chunk);
                     chunk.length = 0;
                 }
@@ -17619,9 +17636,16 @@ if (typeof globalThis.Buffer === 'undefined') {
             const enc = String(encoding || 'utf8').toLowerCase();
             if (enc === 'base64') {
                 let binary = '';
-                const CHUNK_SIZE = 8192;
-                for (let i = 0; i < view.length; i += CHUNK_SIZE) {
-                    binary += String.fromCharCode.apply(null, view.subarray(i, i + CHUNK_SIZE));
+                let chunk = [];
+                for (let i = 0; i < view.length; i++) {
+                    chunk.push(view[i]);
+                    if (chunk.length >= 4096) {
+                        binary += String.fromCharCode.apply(null, chunk);
+                        chunk.length = 0;
+                    }
+                }
+                if (chunk.length > 0) {
+                    binary += String.fromCharCode.apply(null, chunk);
                 }
                 return __pi_base64_encode_native(binary);
             }
@@ -17745,9 +17769,16 @@ if (typeof globalThis.crypto.subtle.digest !== 'function') {
         }
         const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
         let text = '';
-        const CHUNK_SIZE = 8192;
-        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-            text += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK_SIZE));
+        let chunk = [];
+        for (let i = 0; i < bytes.length; i++) {
+            chunk.push(bytes[i]);
+            if (chunk.length >= 4096) {
+                text += String.fromCharCode.apply(null, chunk);
+                chunk.length = 0;
+            }
+        }
+        if (chunk.length > 0) {
+            text += String.fromCharCode.apply(null, chunk);
         }
         const hex = __pi_crypto_sha256_hex_native(text);
         const out = new Uint8Array(hex.length / 2);
@@ -18338,9 +18369,16 @@ if (typeof globalThis.fetch !== 'function') {
         }
         if (!bytes) return null;
         let binary = '';
-        const CHUNK_SIZE = 8192;
-        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK_SIZE));
+        let chunk = [];
+        for (let i = 0; i < bytes.length; i++) {
+            chunk.push(bytes[i]);
+            if (chunk.length >= 4096) {
+                binary += String.fromCharCode.apply(null, chunk);
+                chunk.length = 0;
+            }
+        }
+        if (chunk.length > 0) {
+            binary += String.fromCharCode.apply(null, chunk);
         }
         return __pi_base64_encode_native(binary);
     };

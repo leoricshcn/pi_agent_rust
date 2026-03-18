@@ -490,11 +490,10 @@ fn register_host_imports(
                                             host.staged_files.get_mut(&path).ok_or_else(|| {
                                                 anyhow!("Virtual file disappeared during open")
                                             })?;
-                                        let file = std::sync::Arc::make_mut(file_arc);
                                         if flags & O_TRUNC != 0 {
-                                            file.clear();
+                                            std::sync::Arc::make_mut(file_arc).clear();
                                         }
-                                        let bytes_len = file.len();
+                                        let bytes_len = file_arc.len();
                                         let position = if append { bytes_len } else { 0 };
                                         (position, bytes_len)
                                     };

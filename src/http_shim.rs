@@ -73,9 +73,16 @@ function __pi_http_chunks_to_base64(chunks) {
   }
 
   let binary = '';
-  const CHUNK_SIZE = 8192;
-  for (let i = 0; i < merged.length; i += CHUNK_SIZE) {
-    binary += String.fromCharCode.apply(null, merged.subarray(i, i + CHUNK_SIZE));
+  let chunk = [];
+  for (let i = 0; i < merged.length; i++) {
+    chunk.push(merged[i]);
+    if (chunk.length >= 4096) {
+      binary += String.fromCharCode.apply(null, chunk);
+      chunk.length = 0;
+    }
+  }
+  if (chunk.length > 0) {
+    binary += String.fromCharCode.apply(null, chunk);
   }
   return __pi_base64_encode_native(binary);
   }

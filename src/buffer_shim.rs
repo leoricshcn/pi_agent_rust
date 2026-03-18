@@ -37,9 +37,16 @@ function hexDecode(str) {
 
 function base64Encode(bytes) {
   let binary = '';
-  const CHUNK_SIZE = 8192;
-  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK_SIZE));
+  let chunk = [];
+  for (let i = 0; i < bytes.length; i++) {
+    chunk.push(bytes[i]);
+    if (chunk.length >= 4096) {
+      binary += String.fromCharCode.apply(null, chunk);
+      chunk.length = 0;
+    }
+  }
+  if (chunk.length > 0) {
+    binary += String.fromCharCode.apply(null, chunk);
   }
   return globalThis.btoa(binary);
 }
@@ -63,10 +70,17 @@ function latin1Encode(str) {
 
 function latin1Decode(bytes, start, end) {
   let out = '';
-  const CHUNK_SIZE = 8192;
+  let chunk = [];
   const len = end - start;
-  for (let i = 0; i < len; i += CHUNK_SIZE) {
-    out += String.fromCharCode.apply(null, bytes.subarray(start + i, start + Math.min(len, i + CHUNK_SIZE)));
+  for (let i = 0; i < len; i++) {
+    chunk.push(bytes[start + i]);
+    if (chunk.length >= 4096) {
+      out += String.fromCharCode.apply(null, chunk);
+      chunk.length = 0;
+    }
+  }
+  if (chunk.length > 0) {
+    out += String.fromCharCode.apply(null, chunk);
   }
   return out;
 }
