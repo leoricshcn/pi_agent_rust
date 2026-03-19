@@ -191,6 +191,14 @@ impl ResourceCliOptions {
             || !self.extension_paths.is_empty()
             || !self.theme_paths.is_empty()
     }
+
+    /// Returns `true` when every resource category is disabled via `--no-*` flags
+    /// and there are no explicit CLI `-e` extension sources that would require
+    /// package resolution.
+    #[must_use]
+    pub fn all_configured_resources_disabled(&self) -> bool {
+        self.no_skills && self.no_prompt_templates && self.no_extensions && self.no_themes
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -236,16 +244,32 @@ impl ResourceLoader {
     ) -> Result<Self> {
         let enable_skill_commands = config.enable_skill_commands();
 
-        // Resolve configured resources (settings + auto-discovery + packages) and CLI `-e` sources.
-        let resolved = Box::pin(manager.resolve()).await?;
-        let cli_extensions = Box::pin(manager.resolve_extension_sources(
-            &cli.extension_paths,
-            ResolveExtensionSourcesOptions {
-                local: false,
-                temporary: true,
-            },
-        ))
-        .await?;
+        // Skip the expensive package/settings resolution when every resource
+        // category is disabled (--no-extensions --no-skills etc.) and there are
+        // no explicit CLI `-e` sources.  This avoids reading settings.json,
+        // running npm lookups, and hitting the network on startup when the user
+        // explicitly opted out of all configured resources (Issue #38).
+        let skip_configured_resolution =
+            cli.all_configured_resources_disabled() && cli.extension_paths.is_empty();
+
+        let resolved = if skip_configured_resolution {
+            crate::package_manager::ResolvedPaths::default()
+        } else {
+            Box::pin(manager.resolve()).await?
+        };
+
+        let cli_extensions = if cli.extension_paths.is_empty() {
+            crate::package_manager::ResolvedPaths::default()
+        } else {
+            Box::pin(manager.resolve_extension_sources(
+                &cli.extension_paths,
+                ResolveExtensionSourcesOptions {
+                    local: false,
+                    temporary: true,
+                },
+            ))
+            .await?
+        };
 
         let explicit_skill_paths = dedupe_paths(
             cli.skill_paths
@@ -300,12 +324,15 @@ impl ResourceLoader {
 
         // Extension entries:
         // - `--no-extensions` disables configured + auto discovery but still allows CLI `-e` sources.
-        let extension_entries = merge_resource_paths(
+        // - Deduplicate by canonical extension ID so that transpiled cache copies
+        //   in `~/.pi/agent/cache/modules/` don't cause command collisions with
+        //   the original source `.ts` extensions (Issue #37).
+        let extension_entries = dedupe_extension_entries_by_id(merge_resource_paths(
             &[],
             cli_extensions.extensions,
             resolved.extensions,
             !cli.no_extensions,
-        );
+        ));
 
         // Load skills, prompt templates, and themes in parallel — they are independent
         // filesystem walks that benefit from overlapped I/O on multi-core machines.
@@ -1814,6 +1841,96 @@ fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         if seen.insert(key) {
             out.push(path);
         }
+    }
+    out
+}
+
+/// Resolve the module disk cache directory used by the JS extension runtime.
+///
+/// This mirrors the logic in `extensions_js::runtime_disk_cache_dir()` so that
+/// we can detect cache/modules entries during discovery without depending on the
+/// runtime module.
+fn module_cache_dir() -> Option<PathBuf> {
+    if let Some(raw) = std::env::var_os("PIJS_MODULE_CACHE_DIR") {
+        return if raw.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(raw))
+        };
+    }
+    dirs::home_dir().map(|home| home.join(".pi").join("agent").join("cache").join("modules"))
+}
+
+/// Returns `true` when `path` resides under the transpiled module cache directory
+/// (`~/.pi/agent/cache/modules/` or `$PIJS_MODULE_CACHE_DIR`).
+fn is_cache_module_path(path: &Path) -> bool {
+    let Some(cache_dir) = module_cache_dir() else {
+        return false;
+    };
+    let canonical = canonical_identity_path(path);
+    let canonical_cache = canonical_identity_path(&cache_dir);
+    canonical.starts_with(&canonical_cache)
+}
+
+/// Derive the canonical extension ID from a filesystem path.
+///
+/// Uses the same heuristic as `JsExtensionLoadSpec::from_entry_path`: if the
+/// file stem is `index`, the parent directory name is the ID; otherwise the
+/// file stem itself is the ID.
+fn extension_id_from_path(path: &Path) -> Option<String> {
+    let canonical = canonical_identity_path(path);
+    let stem = canonical.file_stem().and_then(|s| s.to_str())?.trim();
+    if stem.is_empty() {
+        return None;
+    }
+    if stem.eq_ignore_ascii_case("index") {
+        canonical
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    } else {
+        Some(stem.to_string())
+    }
+}
+
+/// Deduplicate extension entries by canonical extension ID, preferring source
+/// entries over transpiled cache copies (Issue #37).
+///
+/// When both a source `.ts` extension and its transpiled cache copy in
+/// `~/.pi/agent/cache/modules/` are discovered, the cache entry is dropped to
+/// prevent command collisions at load time.
+fn dedupe_extension_entries_by_id(entries: Vec<PathBuf>) -> Vec<PathBuf> {
+    // First pass: collect extension IDs and identify cache vs source entries.
+    let mut id_to_source_idx: HashMap<String, usize> = HashMap::new();
+    let mut is_cache = Vec::with_capacity(entries.len());
+
+    for (idx, path) in entries.iter().enumerate() {
+        let cache = is_cache_module_path(path);
+        is_cache.push(cache);
+
+        if let Some(id) = extension_id_from_path(path) {
+            if !cache {
+                // Source entry wins; record its index.
+                id_to_source_idx.entry(id).or_insert(idx);
+            }
+        }
+    }
+
+    // Second pass: keep entries unless they are cache entries whose ID already
+    // has a source entry.
+    let mut out = Vec::with_capacity(entries.len());
+    for (idx, path) in entries.into_iter().enumerate() {
+        if is_cache[idx] {
+            if let Some(id) = extension_id_from_path(&path) {
+                if id_to_source_idx.contains_key(&id) {
+                    // Skip cache entry — source entry is preferred.
+                    continue;
+                }
+            }
+        }
+        out.push(path);
     }
     out
 }
