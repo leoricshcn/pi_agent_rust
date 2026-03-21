@@ -2924,11 +2924,13 @@ fn persist_package_toggles_with_roots(
             updated_sources.insert(source);
         }
 
-        for (source, filter_state) in scope_updates {
-            if updated_sources.contains(source) {
-                continue;
-            }
+        let mut new_sources: Vec<_> = scope_updates
+            .iter()
+            .filter(|(source, _)| !updated_sources.contains(*source))
+            .collect();
+        new_sources.sort_by_key(|(source, _)| *source);
 
+        for (source, filter_state) in new_sources {
             let mut obj = serde_json::Map::new();
             obj.insert("source".to_string(), Value::String(source.clone()));
             for kind in ConfigResourceKind::ALL {
@@ -5318,6 +5320,7 @@ mod tests {
     }
 
     struct ConfigOverridePackageToggleFixture {
+        _temp: TempDir,
         cwd: PathBuf,
         global_dir: PathBuf,
         override_path: PathBuf,
@@ -5366,6 +5369,7 @@ mod tests {
         .expect("write override settings");
 
         ConfigOverridePackageToggleFixture {
+            _temp: temp,
             cwd,
             global_dir,
             override_path,
