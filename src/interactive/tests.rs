@@ -457,7 +457,6 @@ fn enqueue_pi_event_current_uses_ambient_context_under_backpressure() {
 #[test]
 fn enqueue_pi_event_current_ignores_ambient_context_cancellation() {
     asupersync::test_utils::run_test(|| async {
-        use asupersync::channel::mpsc::RecvError;
         use asupersync::types::CancelKind;
 
         let (event_tx, event_rx) = mpsc::channel(1);

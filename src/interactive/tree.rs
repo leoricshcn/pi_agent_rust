@@ -579,15 +579,13 @@ fn build_tree_selector_rows(
             return String::new();
         }
         let mut out = String::with_capacity(max);
-        let mut count = 0;
-        for c in text.chars() {
+        for (count, c) in text.chars().enumerate() {
             if count == max {
                 out.pop();
                 out.push('…');
                 return out;
             }
             out.push(if c == '\n' { ' ' } else { c });
-            count += 1;
         }
         out
     }

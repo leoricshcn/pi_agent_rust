@@ -4883,7 +4883,7 @@ async fn get_file_lines_async<'a>(
                 lines.push(piece.to_string());
             }
         }
-        if content.ends_with('\n') && lines.last().is_some_and(|l| l.is_empty()) {
+        if content.ends_with('\n') && lines.last().is_some_and(std::string::String::is_empty) {
             lines.pop();
         }
         cache.insert(path.to_path_buf(), lines);

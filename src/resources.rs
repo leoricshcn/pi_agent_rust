@@ -196,7 +196,7 @@ impl ResourceCliOptions {
     /// and there are no explicit CLI `-e` extension sources that would require
     /// package resolution.
     #[must_use]
-    pub fn all_configured_resources_disabled(&self) -> bool {
+    pub const fn all_configured_resources_disabled(&self) -> bool {
         self.no_skills && self.no_prompt_templates && self.no_extensions && self.no_themes
     }
 }
