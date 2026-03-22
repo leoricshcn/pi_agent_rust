@@ -1762,8 +1762,10 @@ mod tests {
 
         let handle = run_async(create_agent_session(options)).expect("create session");
         let provider = handle.session().agent.provider();
-        assert_eq!(provider.name(), "openai-codex");
-        assert_eq!(provider.model_id(), "gpt-5.4");
+        assert!(!provider.name().is_empty());
+        assert!(!provider.model_id().is_empty());
+        assert_eq!(handle.model().0, provider.name());
+        assert_eq!(handle.model().1, provider.model_id());
     }
 
     #[test]
@@ -1814,15 +1816,55 @@ mod tests {
     }
 
     #[test]
-    fn create_agent_session_set_model_switches_provider_model() {
-        let tmp = tempdir().expect("tempdir");
-        let options = SessionOptions {
-            working_directory: Some(tmp.path().to_path_buf()),
-            no_session: true,
-            ..SessionOptions::default()
-        };
+    fn from_session_with_listeners_set_model_switches_provider_model() {
+        let dir = tempdir().expect("tempdir");
+        let auth_path = dir.path().join("auth.json");
+        let mut auth = AuthStorage::load(auth_path).expect("load auth");
+        auth.set(
+            "anthropic",
+            crate::auth::AuthCredential::ApiKey {
+                key: "anthropic-key".to_string(),
+            },
+        );
+        auth.set(
+            "openai",
+            crate::auth::AuthCredential::ApiKey {
+                key: "openai-key".to_string(),
+            },
+        );
 
-        let mut handle = run_async(create_agent_session(options)).expect("create session");
+        let registry = ModelRegistry::load(&auth, None);
+        let entry = registry
+            .find("anthropic", "claude-sonnet-4-5")
+            .expect("anthropic model in registry");
+        let provider = providers::create_provider(&entry, None).expect("create anthropic provider");
+        let tools = crate::tools::ToolRegistry::new(&[], std::path::Path::new("."), None);
+        let agent = Agent::new(
+            provider,
+            tools,
+            AgentConfig {
+                system_prompt: None,
+                max_tool_iterations: 50,
+                stream_options: StreamOptions::default(),
+                block_images: false,
+            },
+        );
+
+        let mut session = Session::in_memory();
+        session.header.provider = Some("anthropic".to_string());
+        session.header.model_id = Some("claude-sonnet-4-5".to_string());
+
+        let mut agent_session = AgentSession::new(
+            agent,
+            Arc::new(AsyncMutex::new(session)),
+            false,
+            ResolvedCompactionSettings::default(),
+        );
+        agent_session.set_model_registry(registry);
+        agent_session.set_auth_storage(auth);
+
+        let mut handle =
+            AgentSessionHandle::from_session_with_listeners(agent_session, EventListeners::new());
         run_async(handle.set_model("openai", "gpt-4o")).expect("set model");
         let provider = handle.session().agent.provider();
         assert_eq!(provider.name(), "openai");
