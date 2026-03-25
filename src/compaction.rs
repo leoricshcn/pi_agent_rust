@@ -67,15 +67,23 @@ pub struct ResolvedCompactionSettings {
 }
 
 impl Default for ResolvedCompactionSettings {
+    /// Conservative default using the smallest common context window (32K).
+    ///
+    /// Production code paths should always override `context_window_tokens`
+    /// with the actual model's context window via
+    /// [`context_window_tokens_for_entry`](crate::main) or equivalent.
+    /// This default is deliberately conservative so that if a code path
+    /// forgets to override, compaction triggers too early (safe) rather
+    /// than too late (could exceed the real context window).
     fn default() -> Self {
-        let context_window_tokens: u32 = 200_000;
+        let context_window_tokens: u32 = 128_000;
         Self {
             enabled: true,
             context_window_tokens,
             // ~8% of context window
-            reserve_tokens: 16_384,
+            reserve_tokens: 10_240,
             // 10% of context window
-            keep_recent_tokens: 20_000,
+            keep_recent_tokens: 12_800,
         }
     }
 }
@@ -1496,8 +1504,9 @@ mod tests {
     fn default_settings() {
         let settings = ResolvedCompactionSettings::default();
         assert!(settings.enabled);
-        assert_eq!(settings.reserve_tokens, 16_384);
-        assert_eq!(settings.keep_recent_tokens, 20_000);
+        assert_eq!(settings.context_window_tokens, 128_000);
+        assert_eq!(settings.reserve_tokens, 10_240);
+        assert_eq!(settings.keep_recent_tokens, 12_800);
     }
 
     // ── Helper: entry constructors ──────────────────────────────────

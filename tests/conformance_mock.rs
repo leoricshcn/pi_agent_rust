@@ -338,9 +338,9 @@ fn build_conformance_output(
         .map(|entry| serde_json::to_value(entry.model).expect("model to json"))
         .collect();
 
-    // Event hooks are per-extension (no aggregate list API on ExtensionManager),
-    // so we leave this empty for now — the differential runner will populate it
-    // from the snapshot when needed.
+    // Event hooks are per-extension (no aggregate list API on ExtensionManager).
+    // Intentionally empty here; the differential runner populates hooks from
+    // the JS snapshot when comparing against the TypeScript reference.
     let event_hooks: Vec<String> = Vec::new();
 
     ConformanceOutput {

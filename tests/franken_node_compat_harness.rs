@@ -2,8 +2,8 @@
 //!
 //! Executes JS fixture scripts against Node.js and Bun to capture baseline
 //! compatibility data, then produces a machine-readable compatibility matrix
-//! artifact. When `FrankenNode` runtime is available, it will be tested against
-//! these same fixtures for parity verification.
+//! artifact. When a `FrankenNode` runtime becomes available, it can be tested
+//! against these same fixtures for parity verification (not yet implemented).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

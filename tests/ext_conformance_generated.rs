@@ -4439,7 +4439,7 @@ macro_rules! conformance_test {
     };
     ($name:ident, $ext_id:literal, ignore $(,)?) => {
         #[test]
-        #[ignore = "TODO: enable once full extension conformance runner is supported"]
+        #[ignore = "Unvendored extension: not yet onboarded into conformance corpus"]
         fn $name() {
             run_conformance_test($ext_id);
         }

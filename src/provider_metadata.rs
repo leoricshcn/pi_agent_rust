@@ -29,6 +29,10 @@ pub struct ProviderRoutingDefaults {
     pub auth_header: bool,
     pub reasoning: bool,
     pub input: &'static [InputType],
+    /// Provider-level fallback context window.  Per-model values from the
+    /// model registry (`models.json` / built-in catalog) take precedence
+    /// at runtime.  This is only used when a model entry lacks an explicit
+    /// `context_window` value.
     pub context_window: u32,
     pub max_tokens: u32,
 }

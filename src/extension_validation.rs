@@ -435,7 +435,7 @@ pub fn run_validation_pipeline(
                     has_export_default: entry.has_export_default,
                     registrations: entry.registrations.clone(),
                     sources: vec!["code_search".to_string()],
-                    reason: String::new(), // Will be computed later.
+                    reason: String::new(), // Populated by build_classification_reason() below.
                 },
                 aliases: Vec::new(),
                 source_tier: Some("third-party-github".to_string()),
