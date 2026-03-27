@@ -392,11 +392,41 @@ class Buffer extends Uint8Array {
     return v > 127 ? v - 256 : v;
   }
 
+  readInt16LE(offset) {
+    offset = offset >>> 0;
+    if (offset + 2 > this.length) throw new RangeError('Index out of range');
+    const v = this[offset] | (this[offset + 1] << 8);
+    return v > 32767 ? v - 65536 : v;
+  }
+
+  readInt16BE(offset) {
+    offset = offset >>> 0;
+    if (offset + 2 > this.length) throw new RangeError('Index out of range');
+    const v = (this[offset] << 8) | this[offset + 1];
+    return v > 32767 ? v - 65536 : v;
+  }
+
+  readInt32LE(offset) {
+    offset = offset >>> 0;
+    if (offset + 4 > this.length) throw new RangeError('Index out of range');
+    return this[offset] | (this[offset+1] << 8) | (this[offset+2] << 16) | (this[offset+3] << 24);
+  }
+
+  readInt32BE(offset) {
+    offset = offset >>> 0;
+    if (offset + 4 > this.length) throw new RangeError('Index out of range');
+    return (this[offset] << 24) | (this[offset+1] << 16) | (this[offset+2] << 8) | this[offset+3];
+  }
+
   writeUInt8(value, offset) {
     offset = offset >>> 0;
     if (offset >= this.length) throw new RangeError('Index out of range');
     this[offset] = value & 0xFF;
     return offset + 1;
+  }
+
+  writeInt8(value, offset) {
+    return this.writeUInt8(value, offset);
   }
 
   writeUInt16LE(value, offset) {
@@ -407,12 +437,20 @@ class Buffer extends Uint8Array {
     return offset + 2;
   }
 
+  writeInt16LE(value, offset) {
+    return this.writeUInt16LE(value, offset);
+  }
+
   writeUInt16BE(value, offset) {
     offset = offset >>> 0;
     if (offset + 2 > this.length) throw new RangeError('Index out of range');
     this[offset] = (value >>> 8) & 0xFF;
     this[offset + 1] = value & 0xFF;
     return offset + 2;
+  }
+
+  writeInt16BE(value, offset) {
+    return this.writeUInt16BE(value, offset);
   }
 
   writeUInt32LE(value, offset) {
@@ -425,6 +463,10 @@ class Buffer extends Uint8Array {
     return offset + 4;
   }
 
+  writeInt32LE(value, offset) {
+    return this.writeUInt32LE(value, offset);
+  }
+
   writeUInt32BE(value, offset) {
     offset = offset >>> 0;
     if (offset + 4 > this.length) throw new RangeError('Index out of range');
@@ -433,6 +475,10 @@ class Buffer extends Uint8Array {
     this[offset+2] = (value >>> 8) & 0xFF;
     this[offset+3] = value & 0xFF;
     return offset + 4;
+  }
+
+  writeInt32BE(value, offset) {
+    return this.writeUInt32BE(value, offset);
   }
 }
 
