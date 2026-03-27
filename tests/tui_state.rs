@@ -448,16 +448,16 @@ fn conversation_from_session(session: &Session) -> (Vec<ConversationMessage>, Us
                 });
             }
             SessionMessage::Custom {
-                content, display, ..
+                content,
+                display: true,
+                ..
             } => {
-                if *display {
-                    messages.push(ConversationMessage {
-                        role: MessageRole::System,
-                        content: content.clone(),
-                        thinking: None,
-                        collapsed: false,
-                    });
-                }
+                messages.push(ConversationMessage {
+                    role: MessageRole::System,
+                    content: content.clone(),
+                    thinking: None,
+                    collapsed: false,
+                });
             }
             _ => {}
         }
