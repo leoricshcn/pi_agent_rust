@@ -131,25 +131,20 @@ impl SessionPicker {
                 return self.handle_delete_prompt(key);
             }
             match key.key_type {
-                KeyType::Up => {
-                    if self.selected > 0 {
-                        self.selected -= 1;
-                    }
+                KeyType::Up if self.selected > 0 => {
+                    self.selected -= 1;
                 }
-                KeyType::Down => {
-                    if self.selected < self.sessions.len().saturating_sub(1) {
-                        self.selected += 1;
-                    }
+                KeyType::Down if self.selected < self.sessions.len().saturating_sub(1) => {
+                    self.selected += 1;
                 }
-                KeyType::Runes if key.runes == ['k'] => {
-                    if self.selected > 0 {
-                        self.selected -= 1;
-                    }
+                KeyType::Runes if key.runes == ['k'] && self.selected > 0 => {
+                    self.selected -= 1;
                 }
-                KeyType::Runes if key.runes == ['j'] => {
-                    if self.selected < self.sessions.len().saturating_sub(1) {
-                        self.selected += 1;
-                    }
+                KeyType::Runes
+                    if key.runes == ['j']
+                        && self.selected < self.sessions.len().saturating_sub(1) =>
+                {
+                    self.selected += 1;
                 }
                 KeyType::Enter => {
                     if !self.sessions.is_empty() {
@@ -165,12 +160,9 @@ impl SessionPicker {
                     self.cancelled = true;
                     return Some(quit());
                 }
-                KeyType::CtrlD => {
-                    if !self.sessions.is_empty() {
-                        self.confirm_delete = Some(self.selected);
-                        self.status_message =
-                            Some("Delete session? Press y/n to confirm.".to_string());
-                    }
+                KeyType::CtrlD if !self.sessions.is_empty() => {
+                    self.confirm_delete = Some(self.selected);
+                    self.status_message = Some("Delete session? Press y/n to confirm.".to_string());
                 }
                 _ => {}
             }
@@ -533,10 +525,8 @@ fn build_meta_from_jsonl(path: &Path) -> crate::error::Result<SessionMeta> {
         if let Ok(entry) = serde_json::from_str::<PartialEntry>(&line) {
             match entry.r#type.as_str() {
                 "message" => message_count += 1,
-                "session_info" => {
-                    if entry.name.is_some() {
-                        name = entry.name;
-                    }
+                "session_info" if entry.name.is_some() => {
+                    name = entry.name;
                 }
                 _ => {}
             }

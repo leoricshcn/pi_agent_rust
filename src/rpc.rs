@@ -2977,10 +2977,10 @@ mod retry_tests {
                     "auto_retry_start" => {
                         saw_retry_start = true;
                     }
-                    "auto_retry_end" => {
-                        if value.get("success").and_then(Value::as_bool) == Some(true) {
-                            saw_retry_end_success = true;
-                        }
+                    "auto_retry_end"
+                        if value.get("success").and_then(Value::as_bool) == Some(true) =>
+                    {
+                        saw_retry_end_success = true;
                     }
                     _ => {}
                 }

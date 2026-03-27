@@ -21637,11 +21637,9 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                 2 => {
                     runtime.enqueue_event("evt", serde_json::json!({ "step": step }));
                 }
-                3 => {
-                    if !timers.is_empty() {
-                        let idx = rng.next_usize(timers.len());
-                        let _ = runtime.clear_timeout(timers[idx]);
-                    }
+                3 if !timers.is_empty() => {
+                    let idx = rng.next_usize(timers.len());
+                    let _ = runtime.clear_timeout(timers[idx]);
                 }
                 4 => {
                     let delta_ms = rng.next_range_u64(50);

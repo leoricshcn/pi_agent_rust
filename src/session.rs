@@ -2973,10 +2973,8 @@ fn load_session_meta_jsonl(path: &Path) -> Result<SessionPickEntry> {
         if let Ok(entry) = serde_json::from_str::<PartialEntry>(&line_content) {
             match entry.r#type.as_str() {
                 "message" => message_count += 1,
-                "session_info" => {
-                    if entry.name.is_some() {
-                        name = entry.name;
-                    }
+                "session_info" if entry.name.is_some() => {
+                    name = entry.name;
                 }
                 _ => {}
             }
@@ -3773,10 +3771,8 @@ fn session_entry_stats(entries: &[SessionEntry]) -> (u64, Option<String>) {
     for entry in entries {
         match entry {
             SessionEntry::Message(_) => message_count += 1,
-            SessionEntry::SessionInfo(info) => {
-                if info.name.is_some() {
-                    name.clone_from(&info.name);
-                }
+            SessionEntry::SessionInfo(info) if info.name.is_some() => {
+                name.clone_from(&info.name);
             }
             _ => {}
         }
@@ -4681,10 +4677,8 @@ fn finalize_loaded_entries(entries: &mut [SessionEntry]) -> LoadFinalization {
         // Stats.
         match entry {
             SessionEntry::Message(_) => message_count += 1,
-            SessionEntry::SessionInfo(info) => {
-                if info.name.is_some() {
-                    name.clone_from(&info.name);
-                }
+            SessionEntry::SessionInfo(info) if info.name.is_some() => {
+                name.clone_from(&info.name);
             }
             _ => {}
         }

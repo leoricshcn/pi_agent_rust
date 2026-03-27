@@ -2866,7 +2866,7 @@ impl CusumState {
                 self.baseline_sigma = 0.0;
             } else {
                 let delta2 = interval_ms - self.baseline_interval_ms;
-                self.baseline_sigma += delta * delta2;
+                self.baseline_sigma = delta.mul_add(delta2, self.baseline_sigma);
             }
             if self.baseline_n >= Self::MIN_BASELINE_OBS {
                 self.baseline_ready = true;
@@ -3247,7 +3247,7 @@ impl ConformalState {
         let delta = value - self.running_mean;
         self.running_mean += delta / n;
         let delta2 = value - self.running_mean;
-        self.running_m2 += delta * delta2;
+        self.running_m2 = delta.mul_add(delta2, self.running_m2);
 
         // Nonconformity score = absolute residual from running mean.
         let score = delta.abs();
@@ -3397,7 +3397,7 @@ impl PacBayesState {
 fn kl_divergence(p: f64, q: f64) -> f64 {
     let p = p.clamp(1e-10, 1.0 - 1e-10);
     let q = q.clamp(1e-10, 1.0 - 1e-10);
-    p * (p / q).ln() + (1.0 - p) * ((1.0 - p) / (1.0 - q)).ln()
+    (1.0 - p).mul_add(((1.0 - p) / (1.0 - q)).ln(), p * (p / q).ln())
 }
 
 /// Combined safety envelope state for one extension.
@@ -8351,7 +8351,7 @@ fn runtime_risk_calibration_candidate(
     let objective_score = match config.objective {
         RuntimeRiskCalibrationObjective::MinExpectedLoss => expected_loss,
         RuntimeRiskCalibrationObjective::MinFalsePositives => {
-            (false_positive_rate * fp_weight) + (false_negative_rate * fn_weight * 0.25)
+            (false_negative_rate * fn_weight).mul_add(0.25, false_positive_rate * fp_weight)
         }
         RuntimeRiskCalibrationObjective::BalancedAccuracy => {
             (false_positive_rate * fp_weight) + (false_negative_rate * fn_weight)
@@ -8544,7 +8544,7 @@ fn kl_divergence_discrete3(p: &[f64; 3], q: &[f64; 3]) -> f64 {
     for (i, &p_i) in p.iter().enumerate() {
         if p_i > 0.0 {
             let q_i = q[i].max(1e-12);
-            kl += p_i * (p_i / q_i).ln();
+            kl = p_i.mul_add((p_i / q_i).ln(), kl);
         }
     }
     kl.max(0.0)
@@ -20240,7 +20240,7 @@ async fn pump_js_runtime_once(runtime: &PiJsRuntime, host: &JsRuntimeHost) -> Re
         let batch_start = Instant::now();
         let mut completions = Vec::with_capacity(total);
 
-        for (group, decision) in plan.groups.into_iter().zip(plan.decisions.into_iter()) {
+        for (group, decision) in plan.groups.into_iter().zip(plan.decisions) {
             tracing::debug!(
                 event = "pijs.amac.group_dispatch",
                 group_key = ?group.key,

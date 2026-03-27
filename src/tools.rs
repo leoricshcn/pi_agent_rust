@@ -2038,11 +2038,8 @@ pub(crate) async fn run_bash_command(
     // is cleaned up even if try_wait missed it (observed on macOS when the
     // child is in its own process group).
     if guard.child.is_some() {
-        match guard.wait() {
-            Ok(status) => {
-                exit_code.get_or_insert(exit_status_code(status));
-            }
-            Err(_) => {} // Already reaped by try_wait, which is fine
+        if let Ok(status) = guard.wait() {
+            exit_code.get_or_insert_with(|| exit_status_code(status));
         }
     }
 

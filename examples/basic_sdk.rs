@@ -71,8 +71,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         })),
         on_tool_end: Some(Arc::new(|tool_name, _output, is_error| {
             eprintln!(
-                "[hook] tool ended: {tool_name} (error={})",
-                is_error
+                "[hook] tool ended: {tool_name} (error={is_error})"
             );
         })),
 
@@ -168,7 +167,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         state.provider, state.model_id, state.message_count
     );
 
-    let total_events = event_count.lock().expect("lock poisoned");
+    let total_events = *event_count.lock().expect("lock poisoned");
     eprintln!("Total AgentEvents received by subscriber: {total_events}");
 
     Ok(())

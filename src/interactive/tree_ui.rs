@@ -105,15 +105,13 @@ impl PiApp {
             }
             TreeUiState::SummaryPrompt(mut prompt) => {
                 match key.key_type {
-                    KeyType::Up => {
-                        if prompt.selected > 0 {
-                            prompt.selected -= 1;
-                        }
+                    KeyType::Up if prompt.selected > 0 => {
+                        prompt.selected -= 1;
                     }
-                    KeyType::Down => {
-                        if prompt.selected < TreeSummaryChoice::all().len().saturating_sub(1) {
-                            prompt.selected += 1;
-                        }
+                    KeyType::Down
+                        if prompt.selected < TreeSummaryChoice::all().len().saturating_sub(1) =>
+                    {
+                        prompt.selected += 1;
                     }
                     KeyType::Esc | KeyType::CtrlC => {
                         self.status_message = Some("Tree navigation cancelled".to_string());

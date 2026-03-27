@@ -6470,13 +6470,11 @@ impl AgentSession {
         let mut images = Vec::new();
         for block in blocks {
             match block {
-                ContentBlock::Text(text_block) => {
-                    if !text_block.text.trim().is_empty() {
-                        if !text.is_empty() {
-                            text.push('\n');
-                        }
-                        text.push_str(&text_block.text);
+                ContentBlock::Text(text_block) if !text_block.text.trim().is_empty() => {
+                    if !text.is_empty() {
+                        text.push('\n');
                     }
+                    text.push_str(&text_block.text);
                 }
                 ContentBlock::Image(image) => images.push(image.clone()),
                 _ => {}
@@ -6731,6 +6729,11 @@ impl AgentSession {
                 .await
                 .map_err(|e| Error::session(e.to_string()))?;
             for message in new_messages {
+                if let crate::model::Message::Assistant(ref a) = message {
+                    if a.error_message.is_some() {
+                        continue;
+                    }
+                }
                 session.append_model_message(message);
             }
             if self.save_enabled {
