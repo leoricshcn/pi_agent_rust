@@ -1666,7 +1666,6 @@ download_release_binary() {
     # Try candidates in priority order. dsr bare-binary names first (most common
     # for local releases), then archive formats, then Rust target-triple names.
     local base_v="https://github.com/${OWNER}/${REPO}/releases/download/${VERSION}"
-    local base_l="https://github.com/${OWNER}/${REPO}/releases/latest/download"
     # dsr-style naming: pi_<os>_<arch> with underscores (e.g. pi_darwin_arm64)
     if [ -n "$ASSET_PLATFORM" ]; then
       local dsr_name="pi_${ASSET_PLATFORM//-/_}${EXE_EXT}"
@@ -2574,7 +2573,7 @@ rg -n "AGENT_SKILL_STATUS|CHECKSUM_STATUS|SIGSTORE_STATUS|COMPLETIONS_STATUS" in
 rg -n "install_skill_to_destination|is_installer_managed_skill_file|is_expected_skill_destination" install.sh
 
 # Uninstall safety guards
-rg -n "remove_installed_skills|is_expected_skill_directory|is_managed_skill_file|PIAR_AGENT_SKILL" uninstall.sh
+rg -n "remove_installed_skills|is_managed_skill_file|is_expected_skill_directory|PIAR_AGENT_SKILL" uninstall.sh
 ```
 
 ## 9) Docs Drift Checks
@@ -3017,12 +3016,11 @@ install_agent_skills() {
   if script_dir_candidate="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"; then
     script_dir="$script_dir_candidate"
   fi
-  for candidate in "$script_dir/.claude/skills/${AGENT_SKILL_NAME}"; do
-    if [ -f "$candidate/SKILL.md" ]; then
-      bundled_dir="$candidate"
-      break
-    fi
-  done
+  local bundled_candidate=""
+  bundled_candidate="$script_dir/.claude/skills/${AGENT_SKILL_NAME}"
+  if [ -f "$bundled_candidate/SKILL.md" ]; then
+    bundled_dir="$bundled_candidate"
+  fi
 
   local temp_skill_dir=""
   if [ -n "$bundled_dir" ]; then
@@ -3104,10 +3102,6 @@ install_agent_skills() {
     else
       failed_writes=$((failed_writes + 1))
     fi
-  fi
-
-  if [ -n "$temp_skill" ] && [ -f "$temp_skill" ]; then
-    rm -f "$temp_skill" 2>/dev/null || true
   fi
 
   if [ "$installed_claude" -eq 1 ] && [ "$installed_codex" -eq 1 ]; then

@@ -330,9 +330,11 @@ run_installer() {
   local out="${dir}/output.log"
   local rc_file="${dir}/exit_code"
   local path_value="${dir}/fakebin:/usr/bin:/bin"
+  local run_cwd="${PI_INSTALLER_TEST_CWD:-$PWD}"
 
   (
     set +e
+    cd "$run_cwd" || exit 1
     HOME="${dir}/home" \
     XDG_STATE_HOME="${dir}/state" \
     XDG_DATA_HOME="${dir}/data" \
@@ -714,7 +716,7 @@ STATE
     --no-agent-skills
 
   assert_exit_code "$dir" 0
-  if [ "$(grep -E "\"command\"[[:space:]]*:[[:space:]]*\"${install_bin}\"" "$claude_settings" | wc -l | tr -d ' ')" -ne 1 ]; then
+  if [ "$(grep -Ec "\"command\"[[:space:]]*:[[:space:]]*\"${install_bin}\"" "$claude_settings")" -ne 1 ]; then
     echo "expected exactly one Claude command entry for ${install_bin} after cleanup" >&2
     cat "$claude_settings" >&2
     return 1
@@ -730,7 +732,7 @@ STATE
     return 1
   fi
 
-  if [ "$(grep -E "\"name\"[[:space:]]*:[[:space:]]*\"pi-agent-rust\"" "$gemini_settings" | wc -l | tr -d ' ')" -ne 1 ]; then
+  if [ "$(grep -Ec "\"name\"[[:space:]]*:[[:space:]]*\"pi-agent-rust\"" "$gemini_settings")" -ne 1 ]; then
     echo "expected only the non-default pi-agent-rust Gemini entry to remain after cleanup" >&2
     cat "$gemini_settings" >&2
     return 1
@@ -812,6 +814,7 @@ STATE
 
 test_agent_skills_install_by_default() {
   local dir artifact artifact_url checksum claude_skill codex_skill
+  local claude_commands codex_commands claude_debugging codex_debugging
   dir="$(case_dir "agent-skills-default")"
   write_existing_pi_stub "$dir"
 
@@ -830,11 +833,19 @@ test_agent_skills_install_by_default() {
 
   claude_skill="${dir}/home/.claude/skills/pi-agent-rust/SKILL.md"
   codex_skill="${dir}/home/.codex/skills/pi-agent-rust/SKILL.md"
+  claude_commands="${dir}/home/.claude/skills/pi-agent-rust/references/COMMANDS.md"
+  codex_commands="${dir}/home/.codex/skills/pi-agent-rust/references/COMMANDS.md"
+  claude_debugging="${dir}/home/.claude/skills/pi-agent-rust/references/DEBUGGING-PLAYBOOKS.md"
+  codex_debugging="${dir}/home/.codex/skills/pi-agent-rust/references/DEBUGGING-PLAYBOOKS.md"
 
   assert_exit_code "$dir" 0
   assert_output_contains "$dir" "Skills:    installed (claude,codex)"
   [ -f "$claude_skill" ] || { echo "missing Claude skill: $claude_skill" >&2; return 1; }
   [ -f "$codex_skill" ] || { echo "missing Codex skill: $codex_skill" >&2; return 1; }
+  [ -f "$claude_commands" ] || { echo "missing Claude commands reference: $claude_commands" >&2; return 1; }
+  [ -f "$codex_commands" ] || { echo "missing Codex commands reference: $codex_commands" >&2; return 1; }
+  [ -f "$claude_debugging" ] || { echo "missing Claude debugging reference: $claude_debugging" >&2; return 1; }
+  [ -f "$codex_debugging" ] || { echo "missing Codex debugging reference: $codex_debugging" >&2; return 1; }
   grep -Fq "pi_agent_rust installer managed skill" "$claude_skill" || {
     echo "missing managed marker in Claude skill" >&2
     return 1
@@ -847,6 +858,53 @@ test_agent_skills_install_by_default() {
     echo "installed skill should include high-value command section" >&2
     return 1
   }
+  grep -Fq "## 8) Status and Safety Tracing" "$claude_commands" || {
+    echo "installed Claude command references should include command recipes" >&2
+    return 1
+  }
+  grep -Fq "## Playbook 4: Installer / Uninstaller / Skill Installation Failures" "$claude_debugging" || {
+    echo "installed Claude debugging references should include playbooks" >&2
+    return 1
+  }
+}
+
+test_agent_skill_install_ignores_shadow_pwd_skill() {
+  local dir artifact artifact_url checksum claude_skill codex_skill shadow_skill
+  local claude_commands
+  dir="$(case_dir "agent-skills-ignore-shadow-pwd")"
+  write_existing_pi_stub "$dir"
+
+  mkdir -p "${dir}/shadow/.claude/skills/pi-agent-rust"
+  shadow_skill="${dir}/shadow/.claude/skills/pi-agent-rust/SKILL.md"
+  cat > "$shadow_skill" <<'SKILL'
+# SHADOW SKILL FROM PWD
+SKILL
+
+  artifact="${dir}/fixtures/pi-fixture"
+  write_artifact_binary "$artifact" "unsupported"
+  artifact_url="file://${artifact}"
+  checksum="$(sha256_file "$artifact")"
+
+  PI_INSTALLER_TEST_CWD="${dir}/shadow" run_installer "$dir" \
+    --yes --no-gum --offline \
+    --version v9.9.9 \
+    --dest "${dir}/dest" \
+    --artifact-url "${artifact_url}" \
+    --checksum "${checksum}" \
+    --no-completions
+
+  claude_skill="${dir}/home/.claude/skills/pi-agent-rust/SKILL.md"
+  codex_skill="${dir}/home/.codex/skills/pi-agent-rust/SKILL.md"
+  claude_commands="${dir}/home/.claude/skills/pi-agent-rust/references/COMMANDS.md"
+
+  assert_exit_code "$dir" 0
+  [ -f "$claude_skill" ] || { echo "missing Claude skill after shadow cwd install" >&2; return 1; }
+  [ -f "$codex_skill" ] || { echo "missing Codex skill after shadow cwd install" >&2; return 1; }
+  [ -f "$claude_commands" ] || { echo "missing Claude reference docs after shadow cwd install" >&2; return 1; }
+  if grep -Fq "SHADOW SKILL FROM PWD" "$claude_skill"; then
+    echo "installer should ignore shadow skill content from PWD" >&2
+    return 1
+  fi
 }
 
 test_no_agent_skills_opt_out() {
@@ -1076,7 +1134,7 @@ STATE
   run_uninstaller "$dir" --yes --no-gum
 
   assert_exit_code "$dir" 0
-  if [ "$(grep -E "\"command\"[[:space:]]*:[[:space:]]*\"${install_bin}\"" "$claude_settings" | wc -l | tr -d ' ')" -ne 1 ]; then
+  if [ "$(grep -Ec "\"command\"[[:space:]]*:[[:space:]]*\"${install_bin}\"" "$claude_settings")" -ne 1 ]; then
     echo "expected exactly one Claude command entry for ${install_bin} after uninstall cleanup" >&2
     cat "$claude_settings" >&2
     return 1
@@ -1086,7 +1144,7 @@ STATE
     cat "$claude_settings" >&2
     return 1
   fi
-  if [ "$(grep -E "\"name\"[[:space:]]*:[[:space:]]*\"pi-agent-rust\"" "$gemini_settings" | wc -l | tr -d ' ')" -ne 1 ]; then
+  if [ "$(grep -Ec "\"name\"[[:space:]]*:[[:space:]]*\"pi-agent-rust\"" "$gemini_settings")" -ne 1 ]; then
     echo "expected only custom-timeout pi-agent-rust Gemini hook to remain after uninstall cleanup" >&2
     cat "$gemini_settings" >&2
     return 1
@@ -1100,7 +1158,7 @@ STATE
   run_uninstaller "$dir" --yes --no-gum
 
   assert_exit_code "$dir" 0
-  if [ "$(grep -E "\"command\"[[:space:]]*:[[:space:]]*\"${install_bin}\"" "$claude_settings" | wc -l | tr -d ' ')" -ne 1 ]; then
+  if [ "$(grep -Ec "\"command\"[[:space:]]*:[[:space:]]*\"${install_bin}\"" "$claude_settings")" -ne 1 ]; then
     echo "expected exactly one Claude command entry for ${install_bin} after second uninstall cleanup" >&2
     cat "$claude_settings" >&2
     return 1
@@ -1110,7 +1168,7 @@ STATE
     cat "$claude_settings" >&2
     return 1
   fi
-  if [ "$(grep -E "\"name\"[[:space:]]*:[[:space:]]*\"pi-agent-rust\"" "$gemini_settings" | wc -l | tr -d ' ')" -ne 1 ]; then
+  if [ "$(grep -Ec "\"name\"[[:space:]]*:[[:space:]]*\"pi-agent-rust\"" "$gemini_settings")" -ne 1 ]; then
     echo "expected only custom-timeout pi-agent-rust Gemini hook to remain after second uninstall cleanup" >&2
     cat "$gemini_settings" >&2
     return 1
@@ -1596,6 +1654,7 @@ main() {
   run_test test_legacy_agent_settings_cleanup_is_safe_and_idempotent
   run_test test_legacy_cleanup_skips_unexpected_settings_paths
   run_test test_agent_skills_install_by_default
+  run_test test_agent_skill_install_ignores_shadow_pwd_skill
   run_test test_no_agent_skills_opt_out
   run_test test_existing_custom_skill_dirs_are_not_overwritten
   run_test test_skill_copy_failure_preserves_existing_managed_skills
