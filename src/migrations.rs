@@ -208,7 +208,14 @@ fn migrate_auth_to_auth_json(agent_dir: &Path, warnings: &mut Vec<String>) -> Ve
                             match serde_json::to_string_pretty(&settings_value) {
                                     Ok(updated) => {
                                         let tmp = settings_path.with_extension("json.tmp");
-                                        let res = fs::File::create(&tmp).and_then(|mut f| {
+                                        let mut opts = fs::OpenOptions::new();
+                                        opts.write(true).create(true).truncate(true);
+                                        #[cfg(unix)]
+                                        {
+                                            use std::os::unix::fs::OpenOptionsExt;
+                                            opts.mode(0o600);
+                                        }
+                                        let res = opts.open(&tmp).and_then(|mut f| {
                                             use std::io::Write;
                                             f.write_all(updated.as_bytes())?;
                                             f.sync_all()
