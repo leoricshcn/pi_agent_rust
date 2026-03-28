@@ -3013,7 +3013,7 @@ install_agent_skills() {
 
   local script_dir=""
   local script_dir_candidate=""
-  if script_dir_candidate="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"; then
+  if script_dir_candidate="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd -P)"; then
     script_dir="$script_dir_candidate"
   fi
   local bundled_candidate=""
@@ -3376,6 +3376,6 @@ main() {
   print_summary
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
   main "$@"
 fi
