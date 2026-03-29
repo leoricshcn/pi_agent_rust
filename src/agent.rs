@@ -963,7 +963,7 @@ impl Agent {
                     {
                         Ok(outcome) => outcome,
                         Err(err) => {
-                            let err_string = err.to_string();
+                            let _err_string = err.to_string();
                             let steering_to_add = self.drain_steering_messages().await;
                             for message in steering_to_add {
                                 self.messages.push(message.clone());

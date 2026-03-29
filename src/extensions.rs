@@ -22275,7 +22275,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
     max_capture_bytes: u64,
 ) -> HostcallOutcome {
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-    use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
+    use std::sync::mpsc::{self, RecvTimeoutError};
 
     enum ExecStreamFrame {
         Stdout(String),
@@ -22286,7 +22286,7 @@ async fn dispatch_hostcall_exec_ref_with_limit(
 
     fn pump_stream<R: std::io::Read>(
         mut reader: R,
-        tx: &std::sync::mpsc::Sender<ExecStreamFrame>,
+        tx: &std::sync::mpsc::SyncSender<ExecStreamFrame>,
         stdout: bool,
     ) -> std::result::Result<(), String> {
         let mut buf = [0u8; 4096];

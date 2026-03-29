@@ -3603,10 +3603,9 @@ impl Tool for GrepTool {
 
         let code = if match_scan_limit_reached {
             // Avoid buffering unbounded stdout/stderr once we've hit the match limit.
-            // `kill()` also waits, ensuring the stdout reader threads can exit promptly.
-            guard
-                .kill()
-                .map_err(|e| Error::tool("grep", format!("Failed to terminate ripgrep: {e}")))?;
+            // `kill()` terminates the process, and we reap it in a background thread
+            // so the stdout reader threads can exit promptly without blocking this task.
+            let _ = guard.kill();
             // Drop any buffered stdout/stderr lines that were queued before termination.
             while stdout_rx.try_recv().is_ok() {}
             while stderr_rx.try_recv().is_ok() {}

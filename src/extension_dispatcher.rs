@@ -2500,7 +2500,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
     ) -> HostcallOutcome {
         use std::process::{Command, Stdio};
         use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-        use std::sync::mpsc::{self, SyncSender};
+        use std::sync::mpsc;
 
         enum ExecStreamFrame {
             Stdout(String),

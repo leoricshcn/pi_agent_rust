@@ -4343,10 +4343,8 @@ async fn run_bash_rpc(
 
         if cx.checkpoint().is_err() {
             cancelled = true;
-            let status_code = match guard.kill() {
-                Ok(Some(status)) => status.code().unwrap_or(-1),
-                _ => -1,
-            };
+            let _ = guard.kill();
+            let status_code = -1;
             break status_code;
         }
 
