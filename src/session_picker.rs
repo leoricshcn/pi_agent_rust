@@ -11,13 +11,12 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bubbletea::{Cmd, KeyMsg, KeyType, Message, Program, quit};
-use serde::Deserialize;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::session::{Session, SessionHeader, encode_cwd};
+use crate::session::{Session, encode_cwd};
 use crate::session_index::session_file_stats;
-use crate::session_index::{SessionIndex, SessionMeta};
+use crate::session_index::{SessionIndex, SessionMeta, is_session_file_path, build_meta_from_file};
 use crate::theme::{Theme, TuiStyles};
 
 /// Format a timestamp for display.
@@ -478,110 +477,6 @@ fn scan_sessions_on_disk(
     ScanSessionsResult {
         metas: out,
         failed_paths,
-    }
-}
-
-fn build_meta_from_file(path: &Path) -> crate::error::Result<SessionMeta> {
-    match path.extension().and_then(|ext| ext.to_str()) {
-        Some("jsonl") => build_meta_from_jsonl(path),
-        #[cfg(feature = "sqlite-sessions")]
-        Some("sqlite") => build_meta_from_sqlite(path),
-        _ => Err(Error::session(format!(
-            "Unsupported session file extension: {}",
-            path.display()
-        ))),
-    }
-}
-
-#[derive(Deserialize)]
-struct PartialEntry {
-    #[serde(default)]
-    r#type: String,
-    #[serde(default)]
-    name: Option<String>,
-}
-
-fn build_meta_from_jsonl(path: &Path) -> crate::error::Result<SessionMeta> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
-
-    let header_line = lines
-        .next()
-        .transpose()?
-        .ok_or_else(|| crate::error::Error::session("Empty session file"))?;
-
-    let header: SessionHeader = serde_json::from_str(&header_line)
-        .map_err(|e| crate::error::Error::session(format!("Parse session header: {e}")))?;
-    header.validate().map_err(|reason| {
-        crate::error::Error::session(format!("Invalid session header: {reason}"))
-    })?;
-
-    let mut message_count = 0u64;
-    let mut name = None;
-
-    for line_res in lines {
-        let line = line_res?;
-        if let Ok(entry) = serde_json::from_str::<PartialEntry>(&line) {
-            match entry.r#type.as_str() {
-                "message" => message_count += 1,
-                "session_info" if entry.name.is_some() => {
-                    name = entry.name;
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let meta = fs::metadata(path)?;
-    let size_bytes = meta.len();
-    let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let millis = modified
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let last_modified_ms = i64::try_from(millis).unwrap_or(i64::MAX);
-
-    Ok(SessionMeta {
-        path: path.display().to_string(),
-        id: header.id,
-        cwd: header.cwd,
-        timestamp: header.timestamp,
-        message_count,
-        last_modified_ms,
-        size_bytes,
-        name,
-    })
-}
-
-#[cfg(feature = "sqlite-sessions")]
-fn build_meta_from_sqlite(path: &Path) -> crate::error::Result<SessionMeta> {
-    let meta = futures::executor::block_on(crate::session_sqlite::load_session_meta(path))?;
-    let header = meta.header;
-    header.validate().map_err(|reason| {
-        crate::error::Error::session(format!("Invalid session header: {reason}"))
-    })?;
-
-    let (last_modified_ms, size_bytes) = session_file_stats(path)?;
-
-    Ok(SessionMeta {
-        path: path.display().to_string(),
-        id: header.id,
-        cwd: header.cwd,
-        timestamp: header.timestamp,
-        message_count: meta.message_count,
-        last_modified_ms,
-        size_bytes,
-        name: meta.name,
-    })
-}
-
-fn is_session_file_path(path: &Path) -> bool {
-    match path.extension().and_then(|ext| ext.to_str()) {
-        Some("jsonl") => true,
-        #[cfg(feature = "sqlite-sessions")]
-        Some("sqlite") => true,
-        _ => false,
     }
 }
 
@@ -1080,10 +975,10 @@ mod tests {
         assert!(picker.confirm_delete.is_none());
     }
 
-    // ── build_meta_from_jsonl ──────────────────────────────────────────
+    // ── build_meta_from_file ──────────────────────────────────────────
 
     #[test]
-    fn build_meta_from_jsonl_parses_session_file() {
+    fn build_meta_from_file_parses_session_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let session_path = tmp.path().join("test.jsonl");
         let mut header = SessionHeader::new();
@@ -1114,7 +1009,7 @@ mod tests {
         );
         fs::write(&session_path, content).expect("write");
 
-        let meta = build_meta_from_jsonl(&session_path).expect("parse meta");
+        let meta = build_meta_from_file(&session_path).expect("parse meta");
         assert_eq!(meta.id, "abc123");
         assert_eq!(meta.cwd, "/work");
         assert_eq!(meta.message_count, 2);
@@ -1123,7 +1018,7 @@ mod tests {
     }
 
     #[test]
-    fn build_meta_from_jsonl_rejects_semantically_invalid_header() {
+    fn build_meta_from_file_rejects_semantically_invalid_header() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let session_path = tmp.path().join("invalid.jsonl");
         let header = serde_json::json!({
@@ -1141,7 +1036,7 @@ mod tests {
         )
         .expect("write");
 
-        let err = build_meta_from_jsonl(&session_path).expect_err("invalid header should fail");
+        let err = build_meta_from_file(&session_path).expect_err("invalid header should fail");
         assert!(
             matches!(err, crate::error::Error::Session(ref msg) if msg.contains("Invalid session header")),
             "expected invalid session header error, got {err:?}"
@@ -1149,12 +1044,12 @@ mod tests {
     }
 
     #[test]
-    fn build_meta_from_jsonl_empty_file_returns_error() {
+    fn build_meta_from_file_empty_file_returns_error() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let session_path = tmp.path().join("empty.jsonl");
         fs::write(&session_path, "").expect("write");
 
-        assert!(build_meta_from_jsonl(&session_path).is_err());
+        assert!(build_meta_from_file(&session_path).is_err());
     }
 
     // ── is_session_file_path additional cases ──────────────────────────
@@ -1204,7 +1099,7 @@ mod tests {
         header.timestamp = "2025-06-01T12:00:00.000Z".to_string();
         fs::write(&session_path, serde_json::to_string(&header).unwrap()).expect("write");
 
-        let cached = build_meta_from_jsonl(&session_path).expect("cached meta");
+        let cached = build_meta_from_file(&session_path).expect("cached meta");
         let mut cached_by_path = HashMap::new();
         cached_by_path.insert(cached.path.clone(), cached);
 
@@ -1236,7 +1131,7 @@ mod tests {
         );
         fs::write(&session_path, content).expect("write session");
 
-        let expected = build_meta_from_jsonl(&session_path).expect("load fresh meta");
+        let expected = build_meta_from_file(&session_path).expect("load fresh meta");
         let index = SessionIndex::for_sessions_root(&base_dir);
         index.reindex_all().expect("seed session index");
 
@@ -1465,7 +1360,7 @@ mod tests {
 
     #[cfg(feature = "sqlite-sessions")]
     #[test]
-    fn build_meta_from_sqlite_uses_session_file_stats() {
+    fn build_meta_from_file_uses_session_file_stats() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut session = Session::create_with_dir_and_store(
             Some(tmp.path().to_path_buf()),
@@ -1478,7 +1373,7 @@ mod tests {
         run_async(async { session.save().await }).expect("save sqlite session");
 
         let session_path = session.path.clone().expect("sqlite session path");
-        let meta = build_meta_from_sqlite(&session_path).expect("sqlite meta");
+        let meta = build_meta_from_file(&session_path).expect("sqlite meta");
         let (expected_ms, expected_size) =
             session_file_stats(&session_path).expect("sqlite file stats");
 

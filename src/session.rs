@@ -13,7 +13,7 @@ use crate::model::{
     UserMessage,
 };
 use crate::session_index::{
-    SessionIndex, enqueue_session_index_snapshot_update, session_file_stats,
+    SessionIndex, enqueue_session_index_snapshot_update, session_file_stats, is_session_file_path,
 };
 use crate::session_store_v2::{self, SessionStoreV2};
 use crate::tui::PiConsole;
@@ -2918,14 +2918,6 @@ async fn scan_sessions_on_disk(
     finish_worker_result(handle, recv_result, "Scan task cancelled")
 }
 
-fn is_session_file_path(path: &Path) -> bool {
-    match path.extension().and_then(|ext| ext.to_str()) {
-        Some("jsonl") => true,
-        #[cfg(feature = "sqlite-sessions")]
-        Some("sqlite") => true,
-        _ => false,
-    }
-}
 
 fn load_session_meta(path: &Path) -> Result<SessionPickEntry> {
     match path.extension().and_then(|ext| ext.to_str()) {

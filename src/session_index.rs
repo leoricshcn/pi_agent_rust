@@ -633,7 +633,7 @@ pub(crate) fn session_file_stats(path: &Path) -> Result<(i64, u64)> {
     Ok((ms, size))
 }
 
-fn is_session_file_path(path: &Path) -> bool {
+pub(crate) fn is_session_file_path(path: &Path) -> bool {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         if name.starts_with("session-index.") {
             return false;
