@@ -987,7 +987,7 @@ After approving access in the browser, press Enter in Pi to complete login."
         }
     }
 
-    fn dispatch_extension_command(&mut self, command: &str, args: &[String]) -> Option<Cmd> {
+    fn dispatch_extension_command(&mut self, command: &str, args: &str) -> Option<Cmd> {
         let Some(manager) = &self.extensions else {
             self.status_message = Some("Extensions are disabled".to_string());
             return None;
@@ -1004,7 +1004,7 @@ After approving access in the browser, press Enter in Pi to complete login."
         self.current_tool = Some(format!("/{command}"));
 
         let command_name = command.to_string();
-        let args_str = args.join(" ");
+        let args_str = args.to_string();
         let cwd = self.cwd.display().to_string();
         let event_tx = self.event_tx.clone();
         let runtime_handle = self.runtime_handle.clone();
@@ -1597,7 +1597,7 @@ After approving access in the browser, press Enter in Pi to complete login."
         if let Some((command, args)) = parse_extension_command(message) {
             if let Some(manager) = &self.extensions {
                 if manager.has_command(&command) {
-                    return self.dispatch_extension_command(&command, &args);
+                    return self.dispatch_extension_command(&command, args);
                 }
             }
         }
@@ -1883,7 +1883,7 @@ mod stream_delta_batcher_tests {
     use crate::tools::ToolRegistry;
     use asupersync::runtime::RuntimeBuilder;
     use futures::stream;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::path::Path;
     use std::pin::Pin;
@@ -2007,6 +2007,50 @@ mod stream_delta_batcher_tests {
     fn build_test_app() -> PiApp {
         let (app, _event_rx) = build_test_app_with_provider(Arc::new(DummyProvider));
         app
+    }
+
+    fn build_test_extension_manager_with_command_output(
+        output: &Value,
+    ) -> crate::extensions::ExtensionManager {
+        let manager = crate::extensions::ExtensionManager::new();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let entry = temp.path().join("test-extension.native.json");
+        let descriptor = json!({
+            "id": "test-extension",
+            "name": "test-extension",
+            "version": "1.0.0",
+            "apiVersion": crate::extensions::PROTOCOL_VERSION,
+            "slashCommands": [
+                {
+                    "name": "deploy",
+                    "description": "Deploy"
+                }
+            ],
+            "commandOutputs": {
+                "deploy": output
+            }
+        });
+        std::fs::write(
+            &entry,
+            serde_json::to_vec(&descriptor).expect("serialize native extension descriptor"),
+        )
+        .expect("write native extension descriptor");
+
+        runtime().block_on(async {
+            let native_runtime = crate::extensions::NativeRustExtensionRuntimeHandle::start()
+                .await
+                .expect("start native runtime");
+            manager.set_native_runtime(native_runtime);
+            manager
+                .load_native_extensions(vec![
+                    crate::extensions::NativeRustExtensionLoadSpec::from_entry_path(&entry)
+                        .expect("build native extension load spec"),
+                ])
+                .await
+                .expect("load native extension");
+        });
+
+        manager
     }
 
     #[derive(Default)]
@@ -2240,6 +2284,38 @@ mod stream_delta_batcher_tests {
             !state.saw_user_message.load(Ordering::SeqCst),
             "continue path should not synthesize a user message"
         );
+    }
+
+    #[test]
+    fn submit_message_preserves_raw_extension_command_args() {
+        let raw_args = r#"--message "hello world"   --force"#;
+        let (mut app, mut event_rx) = build_test_app_with_provider(Arc::new(DummyProvider));
+        app.extensions = Some(build_test_extension_manager_with_command_output(&json!(
+            raw_args
+        )));
+
+        let _ = app.submit_message(r#"/deploy   --message "hello world"   --force"#);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while std::time::Instant::now() < deadline {
+            match event_rx.try_recv() {
+                Ok(PiMsg::ExtensionCommandDone {
+                    display, is_error, ..
+                }) => {
+                    assert!(!is_error, "unexpected extension command error: {display}");
+                    assert_eq!(display, raw_args);
+                    return;
+                }
+                Ok(PiMsg::AgentError(err)) => {
+                    panic!("unexpected agent error while running extension command: {err}");
+                }
+                Ok(_) | Err(_) => {}
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        panic!("timed out waiting for extension command completion");
     }
 
     #[test]

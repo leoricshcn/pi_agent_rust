@@ -115,7 +115,7 @@ impl SlashCommand {
     }
 }
 
-pub(super) fn parse_extension_command(input: &str) -> Option<(String, Vec<String>)> {
+pub(super) fn parse_extension_command(input: &str) -> Option<(String, &str)> {
     let input = input.trim();
     if !input.starts_with('/') {
         return None;
@@ -131,11 +131,7 @@ pub(super) fn parse_extension_command(input: &str) -> Option<(String, Vec<String
     if cmd.is_empty() {
         return None;
     }
-    let args = rest
-        .split_whitespace()
-        .map(std::string::ToString::to_string)
-        .collect();
-    Some((cmd.to_string(), args))
+    Some((cmd.to_string(), rest.trim()))
 }
 
 pub(super) fn parse_bash_command(input: &str) -> Option<(String, bool)> {
@@ -2498,19 +2494,13 @@ mod tests {
     #[test]
     fn parse_ext_cmd_basic() {
         let result = parse_extension_command("/deploy");
-        assert_eq!(result, Some(("deploy".to_string(), vec![])));
+        assert_eq!(result, Some(("deploy".to_string(), "")));
     }
 
     #[test]
     fn parse_ext_cmd_with_args() {
         let result = parse_extension_command("/deploy staging fast");
-        assert_eq!(
-            result,
-            Some((
-                "deploy".to_string(),
-                vec!["staging".to_string(), "fast".to_string()]
-            ))
-        );
+        assert_eq!(result, Some(("deploy".to_string(), "staging fast")));
     }
 
     #[test]
@@ -2537,21 +2527,21 @@ mod tests {
     #[test]
     fn parse_ext_cmd_whitespace_trimming() {
         let result = parse_extension_command("  /deploy  arg1  arg2  ");
-        assert_eq!(
-            result,
-            Some((
-                "deploy".to_string(),
-                vec!["arg1".to_string(), "arg2".to_string()]
-            ))
-        );
+        assert_eq!(result, Some(("deploy".to_string(), "arg1  arg2")));
     }
 
     #[test]
     fn parse_ext_cmd_single_arg() {
         let result = parse_extension_command("/greet world");
+        assert_eq!(result, Some(("greet".to_string(), "world")));
+    }
+
+    #[test]
+    fn parse_ext_cmd_preserves_raw_argument_spacing_and_quotes() {
+        let result = parse_extension_command(r#"/deploy   --message "hello world"   --force"#);
         assert_eq!(
             result,
-            Some(("greet".to_string(), vec!["world".to_string()]))
+            Some(("deploy".to_string(), r#"--message "hello world"   --force"#))
         );
     }
 

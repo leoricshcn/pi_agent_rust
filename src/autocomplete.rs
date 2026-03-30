@@ -148,6 +148,10 @@ impl AutocompleteProvider {
         let segment = token_at_cursor(text, cursor);
 
         if segment.text.starts_with('/') {
+            let path_response = self.suggest_path(&segment);
+            if should_prefer_absolute_path_completion(segment.text, &path_response) {
+                return path_response;
+            }
             return self.suggest_slash(&segment);
         }
 
@@ -990,62 +994,66 @@ fn token_at_cursor(text: &str, cursor: usize) -> TokenAtCursor<'_> {
     }
 }
 
-fn model_argument_token(text: &str, cursor: usize) -> Option<TokenAtCursor<'_>> {
+fn slash_first_argument_token<'a>(
+    text: &'a str,
+    cursor: usize,
+    commands: &[&str],
+) -> Option<TokenAtCursor<'a>> {
     let cursor = clamp_cursor(text, cursor);
     let line_start = text[..cursor].rfind('\n').map_or(0, |idx| idx + 1);
     let prefix = &text[line_start..cursor];
     let trimmed = prefix.trim_start();
     let leading_ws = prefix.len().saturating_sub(trimmed.len());
 
-    let command = if trimmed.starts_with("/model") {
-        "/model"
-    } else if trimmed.starts_with("/m") {
-        "/m"
-    } else {
-        return None;
-    };
+    let command = commands.iter().copied().find(|command| {
+        trimmed.starts_with(command)
+            && text
+                .get(line_start + leading_ws + command.len()..)
+                .and_then(|tail| tail.chars().next())
+                .is_none_or(char::is_whitespace)
+    })?;
 
     let command_end = line_start + leading_ws + command.len();
-    let command_boundary = text
-        .get(command_end..)
-        .and_then(|tail| tail.chars().next())
-        .is_none_or(char::is_whitespace);
-    if !command_boundary {
-        return None;
-    }
-
     if cursor <= command_end {
         return None;
     }
 
-    Some(token_at_cursor(text, cursor))
-}
-
-fn auth_provider_argument_token(text: &str, cursor: usize) -> Option<TokenAtCursor<'_>> {
-    let cursor = clamp_cursor(text, cursor);
-    let line_start = text[..cursor].rfind('\n').map_or(0, |idx| idx + 1);
-    let prefix = &text[line_start..cursor];
-    let trimmed = prefix.trim_start();
-    let leading_ws = prefix.len().saturating_sub(trimmed.len());
-
-    let command = if trimmed.starts_with("/login") {
-        "/login"
-    } else if trimmed.starts_with("/logout") {
-        "/logout"
-    } else {
-        return None;
-    };
-
-    let command_end = line_start + leading_ws + command.len();
-    let command_boundary = text
-        .get(command_end..)
-        .and_then(|tail| tail.chars().next())
-        .is_none_or(char::is_whitespace);
-    if !command_boundary || cursor <= command_end {
+    let token = token_at_cursor(text, cursor);
+    if text[command_end..token.range.start]
+        .chars()
+        .any(|ch| !ch.is_whitespace())
+    {
         return None;
     }
 
-    Some(token_at_cursor(text, cursor))
+    Some(token)
+}
+
+fn model_argument_token(text: &str, cursor: usize) -> Option<TokenAtCursor<'_>> {
+    slash_first_argument_token(text, cursor, &["/model", "/m"])
+}
+
+fn auth_provider_argument_token(text: &str, cursor: usize) -> Option<TokenAtCursor<'_>> {
+    slash_first_argument_token(text, cursor, &["/login", "/logout"])
+}
+
+fn should_prefer_absolute_path_completion(
+    token_text: &str,
+    path_response: &AutocompleteResponse,
+) -> bool {
+    let token_text = token_text.trim();
+    if !token_text.starts_with('/') {
+        return false;
+    }
+
+    if token_text == "/" || token_text.starts_with("/.") || token_text[1..].contains('/') {
+        return true;
+    }
+
+    path_response
+        .items
+        .iter()
+        .any(|item| item.insert.starts_with(token_text))
 }
 
 fn clamp_cursor(text: &str, cursor: usize) -> usize {
@@ -1333,12 +1341,59 @@ mod tests {
     }
 
     #[test]
+    fn model_autocomplete_does_not_trigger_for_later_arguments() {
+        let mut provider =
+            AutocompleteProvider::new(PathBuf::from("."), AutocompleteCatalog::default());
+        let input = "/model openai/gpt-5 extra";
+        let resp = provider.suggest(input, input.len());
+        assert!(
+            !resp
+                .items
+                .iter()
+                .any(|item| item.kind == AutocompleteItemKind::Model)
+        );
+    }
+
+    #[test]
+    fn auth_provider_autocomplete_does_not_trigger_for_later_arguments() {
+        let mut provider =
+            AutocompleteProvider::new(PathBuf::from("."), AutocompleteCatalog::default());
+        let input = "/login openai extra";
+        let resp = provider.suggest(input, input.len());
+        assert!(!resp.items.iter().any(|item| {
+            item.insert == "openai"
+                || item.insert == "openai-codex"
+                || item.insert == "openai-responses"
+        }));
+    }
+
+    #[test]
     fn login_without_argument_keeps_slash_completion_behavior() {
         let mut provider =
             AutocompleteProvider::new(PathBuf::from("."), AutocompleteCatalog::default());
         let input = "/log";
         let resp = provider.suggest(input, input.len());
         assert!(resp.items.iter().any(|item| item.insert == "/login"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_path_token_prefers_path_completion_over_slash_commands() {
+        let mut provider =
+            AutocompleteProvider::new(PathBuf::from("."), AutocompleteCatalog::default());
+        let input = "/tmp";
+        let resp = provider.suggest(input, input.len());
+        assert!(!resp.items.is_empty(), "expected /tmp path suggestions");
+        assert!(
+            resp.items
+                .iter()
+                .all(|item| item.kind == AutocompleteItemKind::Path)
+        );
+        assert!(
+            resp.items
+                .iter()
+                .any(|item| item.insert.starts_with("/tmp"))
+        );
     }
 
     // ── clamp_cursor / clamp_to_char_boundary ────────────────────────
