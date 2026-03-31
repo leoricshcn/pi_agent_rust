@@ -186,6 +186,7 @@ fn rpc_get_state_and_prompt() {
             resources: ResourceLoader::empty(false),
             available_models: Vec::new(),
             scoped_models: Vec::new(),
+            cli_api_key: None,
             auth,
             runtime_handle: handle.clone(),
         };
@@ -492,6 +493,7 @@ fn rpc_session_stats_counts_tool_calls_and_results() {
             resources: ResourceLoader::empty(false),
             available_models: Vec::new(),
             scoped_models: Vec::new(),
+            cli_api_key: None,
             auth,
             runtime_handle: handle.clone(),
         };

@@ -127,7 +127,11 @@ async fn resolve_selection_with_auth(
         let scoped_models = if scoped_patterns.is_empty() {
             Vec::new()
         } else {
-            pi::app::resolve_model_scope(scoped_patterns, model_registry, cli.api_key.is_some())
+            pi::app::resolve_model_scope(
+                scoped_patterns,
+                model_registry,
+                has_cli_api_key_override(cli.api_key.as_deref()),
+            )
         };
 
         let selection = match pi::app::select_model_and_thinking(
@@ -1139,10 +1143,14 @@ async fn run(
     let scoped_models = if scoped_patterns.is_empty() {
         Vec::new()
     } else {
-        pi::app::resolve_model_scope(&scoped_patterns, &model_registry, cli.api_key.is_some())
+        pi::app::resolve_model_scope(
+            &scoped_patterns,
+            &model_registry,
+            has_cli_api_key_override(cli.api_key.as_deref()),
+        )
     };
 
-    if cli.api_key.is_some()
+    if has_cli_api_key_override(cli.api_key.as_deref())
         && cli.provider.is_none()
         && cli.model.is_none()
         && scoped_models.is_empty()
@@ -1436,7 +1444,7 @@ async fn run(
     let session_handle = Arc::clone(&agent_session.session);
 
     let result = if mode == "rpc" {
-        let available_models = model_registry.get_available();
+        let available_models = rpc_available_models(&model_registry, cli.api_key.as_deref());
         let rpc_scoped_models = selection
             .scoped_models
             .iter()
@@ -1451,6 +1459,7 @@ async fn run(
             config.clone(),
             available_models,
             rpc_scoped_models,
+            cli.api_key.clone(),
             auth.clone(),
             runtime_handle.clone(),
         )
@@ -4079,12 +4088,26 @@ async fn export_session(input_path: &str, output_path: Option<&str>) -> Result<P
     Ok(output_path)
 }
 
+fn has_cli_api_key_override(api_key: Option<&str>) -> bool {
+    api_key.is_some_and(|value| !value.trim().is_empty())
+}
+
+fn rpc_available_models(registry: &ModelRegistry, cli_api_key: Option<&str>) -> Vec<ModelEntry> {
+    if has_cli_api_key_override(cli_api_key) {
+        registry.models().to_vec()
+    } else {
+        registry.get_available()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_rpc_mode(
     session: AgentSession,
     resources: ResourceLoader,
     config: Config,
     available_models: Vec<ModelEntry>,
     scoped_models: Vec<pi::rpc::RpcScopedModel>,
+    cli_api_key: Option<String>,
     auth: AuthStorage,
     runtime_handle: RuntimeHandle,
 ) -> Result<()> {
@@ -4104,6 +4127,7 @@ async fn run_rpc_mode(
             resources,
             available_models,
             scoped_models,
+            cli_api_key,
             auth,
             runtime_handle,
         },
@@ -4886,6 +4910,46 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Package source not found: npm:missing")
+        );
+    }
+
+    #[test]
+    fn rpc_available_models_includes_remote_models_when_cli_api_key_is_present() {
+        let temp = TempDir::new().expect("tempdir");
+        let auth_path = temp.path().join("auth.json");
+        let auth = AuthStorage::load(auth_path).expect("auth load");
+        let registry = ModelRegistry::load(&auth, None);
+
+        let without_cli_key = rpc_available_models(&registry, None);
+        assert!(
+            without_cli_key
+                .iter()
+                .all(|entry| !(entry.model.provider == "openai" && entry.model.id == "gpt-4o")),
+            "OpenAI models should remain hidden without configured credentials"
+        );
+
+        let with_cli_key = rpc_available_models(&registry, Some("cli-override-key"));
+        assert!(
+            with_cli_key
+                .iter()
+                .any(|entry| entry.model.provider == "openai" && entry.model.id == "gpt-4o"),
+            "CLI API-key override should expose remote models to RPC model switching"
+        );
+    }
+
+    #[test]
+    fn rpc_available_models_ignores_blank_cli_api_key_override() {
+        let temp = TempDir::new().expect("tempdir");
+        let auth_path = temp.path().join("auth.json");
+        let auth = AuthStorage::load(auth_path).expect("auth load");
+        let registry = ModelRegistry::load(&auth, None);
+
+        let available_models = rpc_available_models(&registry, Some("   "));
+        assert!(
+            available_models
+                .iter()
+                .all(|entry| !(entry.model.provider == "openai" && entry.model.id == "gpt-4o")),
+            "Blank CLI API-key values should not expose remote models"
         );
     }
 

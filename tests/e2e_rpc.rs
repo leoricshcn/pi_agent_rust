@@ -103,6 +103,7 @@ fn build_options(
         resources: ResourceLoader::empty(false),
         available_models,
         scoped_models,
+        cli_api_key: None,
         auth,
         runtime_handle: handle.clone(),
     }

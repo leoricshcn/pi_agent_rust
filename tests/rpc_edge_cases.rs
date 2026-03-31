@@ -93,6 +93,7 @@ fn make_rpc_options(
         resources: ResourceLoader::empty(false),
         available_models: Vec::new(),
         scoped_models: Vec::new(),
+        cli_api_key: None,
         auth,
         runtime_handle: handle.clone(),
     }

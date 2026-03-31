@@ -53,6 +53,7 @@ pub struct RpcOptions {
     pub resources: ResourceLoader,
     pub available_models: Vec<ModelEntry>,
     pub scoped_models: Vec<RpcScopedModel>,
+    pub cli_api_key: Option<String>,
     pub auth: AuthStorage,
     pub runtime_handle: RuntimeHandle,
 }
@@ -968,7 +969,7 @@ pub async fn run(
                     continue;
                 };
 
-                let key = resolve_model_key(&options.auth, &entry);
+                let key = resolve_model_key(options.cli_api_key.as_deref(), &options.auth, &entry);
                 if model_requires_configured_credential(&entry) && key.is_none() {
                     let err = Error::auth(format!(
                         "Missing credentials for {}/{}",
@@ -2944,6 +2945,7 @@ mod retry_tests {
                 resources: ResourceLoader::empty(false),
                 available_models: Vec::new(),
                 scoped_models: Vec::new(),
+                cli_api_key: None,
                 auth,
                 runtime_handle,
             };
@@ -3045,6 +3047,7 @@ mod retry_tests {
                 resources: ResourceLoader::empty(false),
                 available_models: Vec::new(),
                 scoped_models: Vec::new(),
+                cli_api_key: None,
                 auth,
                 runtime_handle,
             };
@@ -3166,6 +3169,7 @@ mod retry_tests {
                 resources: ResourceLoader::empty(false),
                 available_models: Vec::new(),
                 scoped_models: Vec::new(),
+                cli_api_key: None,
                 auth,
                 runtime_handle,
             };
@@ -3273,6 +3277,7 @@ mod retry_tests {
                 resources: ResourceLoader::empty(false),
                 available_models: Vec::new(),
                 scoped_models: Vec::new(),
+                cli_api_key: None,
                 auth,
                 runtime_handle,
             };
@@ -4509,8 +4514,17 @@ fn parse_prompt_images(value: Option<&Value>) -> Result<Vec<ImageContent>> {
     Ok(images)
 }
 
-fn resolve_model_key(auth: &AuthStorage, entry: &ModelEntry) -> Option<String> {
-    normalize_api_key_opt(auth.resolve_api_key(&entry.model.provider, None))
+fn resolve_model_key(
+    cli_api_key: Option<&str>,
+    auth: &AuthStorage,
+    entry: &ModelEntry,
+) -> Option<String> {
+    cli_api_key
+        .and_then(|key| {
+            let trimmed = key.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+        .or_else(|| normalize_api_key_opt(auth.resolve_api_key(&entry.model.provider, None)))
         .or_else(|| normalize_api_key_opt(entry.api_key.clone()))
 }
 
@@ -4723,7 +4737,7 @@ async fn cycle_model_for_rpc(
     let next_index = current_index.map_or(0, |idx| (idx + 1) % candidates.len());
 
     let next_entry = candidates[next_index].clone();
-    let key = resolve_model_key(&options.auth, &next_entry);
+    let key = resolve_model_key(options.cli_api_key.as_deref(), &options.auth, &next_entry);
     if model_requires_configured_credential(&next_entry) && key.is_none() {
         return Err(Error::auth(format!(
             "Missing credentials for {}/{}",
@@ -4846,6 +4860,7 @@ mod tests {
             resources: ResourceLoader::empty(false),
             available_models,
             scoped_models: Vec::new(),
+            cli_api_key: None,
             auth,
             runtime_handle,
         }
@@ -5006,6 +5021,7 @@ mod tests {
             resources: ResourceLoader::empty(false),
             available_models: Vec::new(),
             scoped_models: Vec::new(),
+            cli_api_key: None,
             auth,
             runtime_handle: handle.clone(),
         }
@@ -5328,7 +5344,7 @@ export default function init(pi) {
         );
 
         assert_eq!(
-            resolve_model_key(&auth, &entry).as_deref(),
+            resolve_model_key(None, &auth, &entry).as_deref(),
             Some("stored-auth-key")
         );
     }
@@ -5353,8 +5369,31 @@ export default function init(pi) {
         );
 
         assert_eq!(
-            resolve_model_key(&auth, &entry).as_deref(),
+            resolve_model_key(None, &auth, &entry).as_deref(),
             Some("stored-auth-key")
+        );
+    }
+
+    #[test]
+    fn resolve_model_key_prefers_cli_override_over_stored_and_inline_keys() {
+        let mut entry = dummy_entry("gpt-4o-mini", true);
+        entry.model.provider = "openai".to_string();
+        entry.auth_header = true;
+        entry.api_key = Some("inline-key".to_string());
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let auth_path = temp.path().join("auth.json");
+        let mut auth = AuthStorage::load(auth_path).expect("auth load");
+        auth.set(
+            "openai".to_string(),
+            AuthCredential::ApiKey {
+                key: "stored-auth-key".to_string(),
+            },
+        );
+
+        assert_eq!(
+            resolve_model_key(Some("cli-override-key"), &auth, &entry).as_deref(),
+            Some("cli-override-key")
         );
     }
 
@@ -6719,6 +6758,46 @@ export default function init(pi) {
             assert_eq!(
                 session.header.model_id.as_deref(),
                 Some(next.model.id.as_str())
+            );
+        });
+    }
+
+    #[test]
+    fn cycle_model_for_rpc_uses_cli_api_key_override_for_remote_model() {
+        let runtime = asupersync::runtime::RuntimeBuilder::new()
+            .blocking_threads(1, 1)
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async move {
+            let mut current = dummy_entry("test-model", false);
+            current.model.provider = "test-provider".to_string();
+            current.model.api = "test-api".to_string();
+            current.model.base_url = "https://example.test/v1".to_string();
+            current.auth_header = false;
+            current.api_key = None;
+
+            let mut next = dummy_entry("cloud-model", true);
+            next.model.provider = "openai".to_string();
+            next.model.api = "openai-completions".to_string();
+            next.model.base_url = "https://api.openai.com/v1".to_string();
+            next.auth_header = true;
+            next.api_key = None;
+
+            let mut options = rpc_options_with_models(vec![current, next.clone()]);
+            options.cli_api_key = Some("cli-override-key".to_string());
+
+            let mut agent_session = build_test_agent_session(Session::in_memory());
+            let result = cycle_model_for_rpc(&mut agent_session, &options)
+                .await
+                .expect("cycle should succeed")
+                .expect("should choose next model");
+
+            assert_eq!(result.0.model.provider, next.model.provider);
+            assert_eq!(result.0.model.id, next.model.id);
+            assert_eq!(
+                agent_session.agent.stream_options().api_key.as_deref(),
+                Some("cli-override-key")
             );
         });
     }

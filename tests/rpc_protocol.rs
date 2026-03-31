@@ -95,6 +95,7 @@ fn rpc_rejects_invalid_json_and_missing_type() {
             resources: ResourceLoader::empty(false),
             available_models: Vec::new(),
             scoped_models: Vec::new(),
+            cli_api_key: None,
             auth,
             runtime_handle: handle.clone(),
         };
@@ -166,6 +167,7 @@ fn rpc_errors_on_unknown_command_and_missing_params() {
             resources: ResourceLoader::empty(false),
             available_models: Vec::new(),
             scoped_models: Vec::new(),
+            cli_api_key: None,
             auth,
             runtime_handle: handle.clone(),
         };
@@ -287,6 +289,7 @@ fn rpc_get_messages_preserves_tool_call_identity_and_args() {
             resources: ResourceLoader::empty(false),
             available_models: Vec::new(),
             scoped_models: Vec::new(),
+            cli_api_key: None,
             auth,
             runtime_handle: handle.clone(),
         };
