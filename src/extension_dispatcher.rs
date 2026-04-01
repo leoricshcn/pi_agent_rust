@@ -2987,9 +2987,8 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                         }
                     }
 
-                    match rx.recv_timeout(Duration::from_millis(10)) {
-                        Ok(chunk) => ingest_chunk(chunk.kind, chunk.bytes),
-                        Err(_) => {} // Timeout or disconnected
+                    if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(10)) {
+                        ingest_chunk(chunk.kind, chunk.bytes);
                     }
                 };
 
