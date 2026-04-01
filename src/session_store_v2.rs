@@ -1134,7 +1134,7 @@ impl SessionStoreV2 {
                     }
                     Err(err) => {
                         let at_eof = reader.fill_buf().is_ok_and(<[u8]>::is_empty);
-                        if !at_eof {
+                        if !at_eof || !missing_newline {
                             return Err(Error::session(format!(
                                 "failed to parse segment frame while rebuilding index: \
                                  segment={} line={line_number}: {err}",

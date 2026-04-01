@@ -3914,7 +3914,7 @@ pub struct ExecMediationPolicy {
     /// Minimum risk tier that triggers a deny (default: Critical).
     /// Commands at or above this tier are blocked.
     pub deny_threshold: ExecRiskTier,
-    /// Explicit command prefixes to deny (case-insensitive substring match).
+    /// Explicit command prefixes to deny (case-insensitive prefix match).
     /// These are checked before the built-in classifier.
     #[serde(default)]
     pub deny_patterns: Vec<String>,
@@ -4314,7 +4314,7 @@ pub fn evaluate_exec_mediation(
 
     // 2. Check explicit deny patterns.
     for pattern in &policy.deny_patterns {
-        if lower.contains(&pattern.to_ascii_lowercase()) {
+        if lower.starts_with(&pattern.to_ascii_lowercase()) {
             return ExecMediationResult::Deny {
                 class: None,
                 reason: format!("Command matches deny pattern: {pattern}"),
