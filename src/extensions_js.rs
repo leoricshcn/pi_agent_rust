@@ -8826,6 +8826,15 @@ export function execSync(command, options) {
   const raw = __pi_exec_sync_native("sh", JSON.stringify(["-c", cmdStr]), cwd, timeout, maxBuffer);
   const result = __parseExecSyncResult(raw, cmdStr);
 
+  if (result.error) {
+    result.error.status = result.status;
+    result.error.stdout = result.stdout || "";
+    result.error.stderr = result.stderr || "";
+    result.error.pid = result.pid || 0;
+    result.error.signal = result.signal;
+    throw result.error;
+  }
+
   if (result.status !== 0 && result.status !== null) {
     const err = new Error(
       `Command failed: ${cmdStr}\n${result.stderr || ""}`,
@@ -9020,6 +9029,15 @@ export function execFileSync(file, argsInput, options) {
 
   const raw = __pi_exec_sync_native(fileStr, JSON.stringify(args), cwd, timeout, maxBuffer);
   const result = __parseExecSyncResult(raw, fileStr);
+
+  if (result.error) {
+    result.error.status = result.status;
+    result.error.stdout = result.stdout || "";
+    result.error.stderr = result.stderr || "";
+    result.error.pid = result.pid || 0;
+    result.error.signal = result.signal;
+    throw result.error;
+  }
 
   if (result.status !== 0 && result.status !== null) {
     const err = new Error(
