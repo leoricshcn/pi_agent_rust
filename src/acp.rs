@@ -429,11 +429,7 @@ async fn run(
                 };
 
                 let session_state = {
-                    if let Ok(guard) = sessions.lock(&cx).await {
-                        guard.get(&session_id).cloned()
-                    } else {
-                        None
-                    }
+                    sessions.lock(&cx).await.map_or_else(|_| None, |guard| guard.get(&session_id).cloned())
                 };
 
                 let Some(session_state) = session_state else {
@@ -522,16 +518,10 @@ async fn run(
                     continue;
                 };
 
-                let aborted = if let Ok(guard) = active_prompts.lock(&cx).await {
-                    if let Some(handle) = guard.get(&prompt_id) {
-                        handle.abort();
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                let aborted = active_prompts.lock(&cx).await.map_or(false, |guard| guard.get(&prompt_id).map_or(false, |handle| {
+                    handle.abort();
+                    true
+                }));
 
                 if aborted {
                     let _ = out_tx.send(json_rpc_ok(id, json!({ "cancelled": true })));
@@ -573,11 +563,7 @@ async fn run(
                     continue;
                 };
 
-                let exists = if let Ok(guard) = sessions.lock(&cx).await {
-                    guard.contains_key(&session_id)
-                } else {
-                    false
-                };
+                let exists = sessions.lock(&cx).await.map_or(false, |guard| guard.contains_key(&session_id));
 
                 if exists {
                     let models: Vec<AcpModel> = options
@@ -622,11 +608,7 @@ async fn run(
                     continue;
                 };
 
-                let exists = if let Ok(guard) = sessions.lock(&cx).await {
-                    guard.contains_key(&session_id)
-                } else {
-                    false
-                };
+                let exists = sessions.lock(&cx).await.map_or(false, |guard| guard.contains_key(&session_id));
 
                 if exists {
                     let _ = out_tx.send(json_rpc_ok(
@@ -695,16 +677,13 @@ async fn run(
                         continue;
                     }
                 };
-                let contents = match request.params.get("contents").and_then(Value::as_str) {
-                    Some(c) => c,
-                    None => {
-                        let _ = out_tx.send(json_rpc_error(
-                            id,
-                            INVALID_PARAMS,
-                            "Missing required parameter: contents",
-                        ));
-                        continue;
-                    }
+                let Some(contents) = request.params.get("contents").and_then(Value::as_str) else {
+                    let _ = out_tx.send(json_rpc_error(
+                        id,
+                        INVALID_PARAMS,
+                        "Missing required parameter: contents",
+                    ));
+                    continue;
                 };
                 let session_id = request.params.get("sessionId").and_then(Value::as_str);
 
@@ -857,7 +836,7 @@ fn build_acp_system_prompt(cwd: &std::path::Path, enabled_tools: &[&str]) -> Str
 
     for (name, description) in &tool_descriptions {
         if enabled_tools.contains(name) {
-            let _ = write!(prompt, "- **{name}**: {description}\n");
+            let _ = writeln!(prompt, "- **{name}**: {description}");
         }
     }
 
@@ -1014,20 +993,18 @@ async fn run_prompt(
                 return;
             }
         };
-        match guard.agent_session.take() {
-            Some(session) => session,
-            None => {
-                let _ = out_tx.send(json_rpc_notification(
-                    "prompt/end",
-                    json!({
-                        "promptId": prompt_id,
-                        "sessionId": session_id,
-                        "error": "Session is busy (agent_session unavailable)",
-                    }),
-                ));
-                return;
-            }
-        }
+        let Some(agent) = guard.agent_session.take() else {
+            let _ = out_tx.send(json_rpc_notification(
+                "prompt/end",
+                json!({
+                    "promptId": prompt_id,
+                    "sessionId": session_id,
+                    "error": "Session is busy (agent_session unavailable)",
+                }),
+            ));
+            return;
+        };
+        agent
     };
 
     let result = agent_session
@@ -1049,7 +1026,7 @@ async fn run_prompt(
                     "promptId": prompt_id,
                     "sessionId": session_id,
                     "content": content,
-                    "stopReason": serde_json::to_value(&msg.stop_reason)
+                    "stopReason": serde_json::to_value(msg.stop_reason)
                         .unwrap_or_else(|_| json!("unknown")),
                 }),
             ));
