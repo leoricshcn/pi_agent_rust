@@ -163,7 +163,7 @@ pub async fn load_session(path: &Path) -> Result<(SessionHeader, Vec<SessionEntr
         .into_iter()
         .next()
         .ok_or_else(|| Error::session("SQLite session missing header row"))?;
-    let header_json = row_get_string(header_row, "json")?;
+    let header_json = row_get_string(&header_row, "json")?;
     let header: SessionHeader = serde_json::from_str(&header_json)
         .map_err(|err| Error::session(format!("Failed to parse session header: {err}\nJSON: {header_json}")))?;
     header
@@ -191,7 +191,7 @@ pub async fn load_session_meta(path: &Path) -> Result<SqliteSessionMeta> {
         .into_iter()
         .next()
         .ok_or_else(|| Error::session("SQLite session missing header row"))?;
-    let header_json = row_get_string(header_row, "json")?;
+    let header_json = row_get_string(&header_row, "json")?;
     let header: SessionHeader = serde_json::from_str(&header_json)
         .map_err(|err| Error::session(format!("Failed to parse session header: {err}\nJSON: {header_json}")))?;
     header

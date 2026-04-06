@@ -1087,6 +1087,20 @@ async fn run(
         return Ok(());
     }
 
+    // ACP (Agent Client Protocol) mode — lightweight JSON-RPC 2.0 over stdio
+    // for Zed editor integration. Sessions are created on-demand via the protocol
+    // so we skip the normal session/model selection pipeline.
+    if cli.acp {
+        let available_models = model_registry.get_available();
+        let acp_options = pi::acp::AcpOptions {
+            config: config.clone(),
+            available_models,
+            auth: auth.clone(),
+            runtime_handle: runtime_handle.clone(),
+        };
+        return run_acp_mode(acp_options).await;
+    }
+
     if cli.mode.as_deref() != Some("rpc") {
         let stdin_content = read_piped_stdin()?;
         pi::app::apply_piped_stdin(&mut cli, stdin_content);
@@ -4147,6 +4161,30 @@ async fn run_rpc_mode(
             // Signal received, return Ok to trigger main_impl's shutdown flush
             Ok(())
         }
+    }
+}
+
+async fn run_acp_mode(options: pi::acp::AcpOptions) -> Result<()> {
+    use futures::FutureExt;
+
+    let (abort_handle, abort_signal) = AbortHandle::new();
+    let abort_listener = abort_handle.clone();
+    if let Err(err) = ctrlc::set_handler(move || {
+        abort_listener.abort();
+    }) {
+        eprintln!("Warning: Failed to install Ctrl+C handler for ACP mode: {err}");
+    }
+    let acp_task = pi::acp::run_stdio(options).fuse();
+    let signal_task = abort_signal.wait().fuse();
+
+    futures::pin_mut!(acp_task, signal_task);
+
+    match futures::future::select(acp_task, signal_task).await {
+        futures::future::Either::Left((result, _)) => match result {
+            Ok(()) => Ok(()),
+            Err(err) => Err(anyhow::Error::new(err)),
+        },
+        futures::future::Either::Right(((), _)) => Ok(()),
     }
 }
 

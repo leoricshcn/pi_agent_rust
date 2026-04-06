@@ -49,6 +49,7 @@ fn known_long_option(name: &str) -> Option<LongOptionSpec> {
         | "no-session"
         | "no-migrations"
         | "print"
+        | "acp"
         | "verbose"
         | "no-tools"
         | "no-extensions"
@@ -354,6 +355,11 @@ pub struct Cli {
     /// Non-interactive mode (process & exit)
     #[arg(short = 'p', long)]
     pub print: bool,
+
+    /// Start in ACP (Agent Client Protocol) mode for Zed editor integration.
+    /// Reads JSON-RPC 2.0 requests from stdin and writes responses to stdout.
+    #[arg(long)]
+    pub acp: bool,
 
     /// Force verbose startup
     #[arg(long)]
