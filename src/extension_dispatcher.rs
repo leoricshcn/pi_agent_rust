@@ -2931,7 +2931,7 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                 let stdout = child.stdout.take().ok_or("Missing stdout pipe")?;
                 let stderr = child.stderr.take().ok_or("Missing stderr pipe")?;
 
-                let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(128);
+                let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(1024);
                 let tx_stdout = tx.clone();
                 let _stdout_handle =
                     thread::spawn(move || pump_stream(stdout, &tx_stdout, StreamKind::Stdout));
@@ -3007,6 +3007,11 @@ impl<C: SchedulerClock + 'static> ExtensionDispatcher<C> {
                 }
 
                 drop(rx); // Close the channel so pump threads exit if blocked
+
+                // Explicitly reap the child to prevent zombies on macOS.
+                // try_wait() uses WNOHANG which may not fully reap when the
+                // child is in its own process group.
+                let _ = child.wait();
 
                 let stdout_bytes: Vec<u8> = stdout_chunks.into_iter().flatten().collect();
                 let stderr_bytes: Vec<u8> = stderr_chunks.into_iter().flatten().collect();

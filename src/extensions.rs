@@ -22703,6 +22703,11 @@ async fn dispatch_hostcall_exec_ref_with_limit(
                 thread::sleep(Duration::from_millis(10));
             };
 
+            // Explicitly reap the child to prevent zombies on macOS.
+            // try_wait() uses WNOHANG which may not fully reap when the
+            // child is in its own process group.
+            let _ = child.wait();
+
             let stdout_bytes = stdout_handle
                 .join()
                 .map_err(|_| "stdout reader thread panicked".to_string())?
