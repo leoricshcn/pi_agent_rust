@@ -660,7 +660,9 @@ impl SessionStoreV2 {
             return Err(err);
         }
 
-        fs::rename(&tmp_path, self.checkpoint_path(checkpoint_seq))?;
+        let target_path = self.checkpoint_path(checkpoint_seq);
+        fs::rename(&tmp_path, &target_path)?;
+        sync_parent_dir(&target_path)?;
         Ok(checkpoint)
     }
 
@@ -764,7 +766,8 @@ impl SessionStoreV2 {
                 let _ = fs::create_dir_all(parent);
             }
             write_jsonl_lines(&index_tmp, &index_rows)?;
-            fs::rename(index_tmp, index_path)?;
+            fs::rename(&index_tmp, &index_path)?;
+            let _ = sync_parent_dir(&index_path);
 
             self.next_segment_seq = 1;
             self.next_frame_seq = 1;
@@ -990,7 +993,9 @@ impl SessionStoreV2 {
             return Err(err);
         }
 
-        fs::rename(&tmp, self.manifest_path())?;
+        let target_path = self.manifest_path();
+        fs::rename(&tmp, &target_path)?;
+        sync_parent_dir(&target_path)?;
         Ok(manifest)
     }
 
@@ -1227,6 +1232,7 @@ impl SessionStoreV2 {
 
         // Atomically replace the old index with the rebuilt one
         fs::rename(&index_tmp_path, &index_path)?;
+        sync_parent_dir(&index_path)?;
 
         self.next_segment_seq = 1;
         self.next_frame_seq = 1;
@@ -1731,6 +1737,19 @@ fn quarantine_segment_tail(segment_files: &[(u64, PathBuf)]) -> Result<()> {
             "SessionStoreV2 quarantined trailing segment during rebuild"
         );
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
