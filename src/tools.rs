@@ -1565,14 +1565,6 @@ impl Tool for ReadTool {
                 break;
             }
             total_bytes_read = total_bytes_read.saturating_add(n as u64);
-            if total_bytes_read > READ_TOOL_MAX_BYTES {
-                return Err(Error::tool(
-                    "read",
-                    format!(
-                        "File grew beyond limit during read ({total_bytes_read} bytes). Max allowed is {READ_TOOL_MAX_BYTES} bytes."
-                    ),
-                ));
-            }
 
             let chunk = normalize_line_endings_chunk(&buf[..n], &mut pending_cr);
             if chunk.is_empty() {
@@ -3952,6 +3944,7 @@ impl Tool for FindTool {
 
         let mut child = Command::new(fd_cmd)
             .args(args)
+            .current_dir(&self.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

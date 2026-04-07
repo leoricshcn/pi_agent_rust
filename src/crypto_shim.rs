@@ -299,7 +299,21 @@ function hexToBuffer(hex) {
   }
   bytes.toString = function(enc) {
     if (enc === 'hex') return hex;
-    if (enc === 'base64') return globalThis.btoa(String.fromCharCode(...this));
+    if (enc === 'base64') {
+      let binary = '';
+      let chunk = [];
+      for (let i = 0; i < this.length; i++) {
+        chunk.push(this[i]);
+        if (chunk.length >= 4096) {
+          binary += String.fromCharCode.apply(null, chunk);
+          chunk.length = 0;
+        }
+      }
+      if (chunk.length > 0) {
+        binary += String.fromCharCode.apply(null, chunk);
+      }
+      return globalThis.btoa(binary);
+    }
     return new TextDecoder().decode(this);
   };
   return bytes;
