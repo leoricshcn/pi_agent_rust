@@ -311,7 +311,7 @@ async fn run(
 
         match request.method.as_str() {
             "initialize" => {
-                let result = handle_initialize(&options);
+                let result = handle_initialize();
                 initialized.store(true, Ordering::SeqCst);
                 let _ = out_tx.send(json_rpc_ok(id, result));
             }
@@ -806,7 +806,7 @@ async fn validate_file_path(
 // Method handlers
 // ============================================================================
 
-fn handle_initialize(_options: &AcpOptions) -> Value {
+fn handle_initialize() -> Value {
     let version = env!("CARGO_PKG_VERSION");
     json!({
         "protocolVersion": "2025-01-01",
@@ -1290,24 +1290,13 @@ mod tests {
 
     #[test]
     fn handle_initialize_returns_correct_shape() {
-        // We can't easily construct AcpOptions in a test without the full runtime,
-        // but we can test the JSON structure that handle_initialize would return.
-        let result = json!({
-            "protocolVersion": "2025-01-01",
-            "serverInfo": {
-                "name": "pi-agent",
-                "version": "test",
-            },
-            "capabilities": {
-                "streaming": true,
-                "toolApproval": true,
-            },
-        });
+        let result = handle_initialize();
 
         assert_eq!(result["protocolVersion"], "2025-01-01");
         assert_eq!(result["serverInfo"]["name"], "pi-agent");
+        assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
         assert!(result["capabilities"]["streaming"].as_bool().unwrap());
-        assert!(result["capabilities"]["toolApproval"].as_bool().unwrap());
+        assert!(!result["capabilities"]["toolApproval"].as_bool().unwrap());
     }
 
     #[test]

@@ -475,23 +475,27 @@ impl PiApp {
             return;
         }
 
-        let current = self
-            .session
-            .try_lock()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .header
-                    .thinking_level
-                    .as_deref()
-                    .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok())
-            })
-            .or_else(|| {
-                self.agent
-                    .try_lock()
-                    .ok()
-                    .and_then(|guard| guard.stream_options().thinking_level)
-            })
+        let mut agent_guard = match self.agent.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.status_message = Some("Agent busy; try again".to_string());
+                return;
+            }
+        };
+        let mut session_guard = match self.session.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.status_message = Some("Session busy; try again".to_string());
+                return;
+            }
+        };
+
+        let current = session_guard
+            .header
+            .thinking_level
+            .as_deref()
+            .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok())
+            .or(agent_guard.stream_options().thinking_level)
             .unwrap_or_default();
 
         let current_index = levels
@@ -500,29 +504,23 @@ impl PiApp {
             .unwrap_or(0);
         let next = levels[(current_index + 1) % levels.len()];
 
-        let changed = if let Ok(mut session_guard) = self.session.try_lock() {
-            let previous_level = session_guard
-                .header
-                .thinking_level
-                .as_deref()
-                .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok());
-            session_guard.header.thinking_level = Some(next.to_string());
-            let changed = previous_level != Some(next);
-            if changed {
-                session_guard.append_thinking_level_change(next.to_string());
-            }
-            changed
-        } else {
-            self.status_message = Some("Session busy; try again".to_string());
-            return;
-        };
+        let previous_level = session_guard
+            .header
+            .thinking_level
+            .as_deref()
+            .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok());
+        session_guard.header.thinking_level = Some(next.to_string());
+        let changed = previous_level != Some(next);
+        if changed {
+            session_guard.append_thinking_level_change(next.to_string());
+        }
+
+        agent_guard.stream_options_mut().thinking_level = Some(next);
+        drop(session_guard);
+        drop(agent_guard);
 
         if changed {
             self.spawn_save_session();
-        }
-
-        if let Ok(mut agent_guard) = self.agent.try_lock() {
-            agent_guard.stream_options_mut().thinking_level = Some(next);
         }
 
         self.status_message = Some(format!("Thinking level: {next}"));
@@ -1437,6 +1435,31 @@ mod tests {
             app.status_message.as_deref(),
             Some("Current model does not support thinking")
         );
+    }
+
+    #[test]
+    fn cycle_thinking_level_action_does_not_persist_without_agent_lock() {
+        let current = model_entry("openai", "gpt-5.2", Some("old-key"), HashMap::new());
+        let mut app = build_test_app(current.clone(), vec![current]);
+        let agent = Arc::clone(&app.agent);
+        let _agent_guard = agent.try_lock().expect("agent lock");
+
+        app.handle_action(
+            AppAction::CycleThinkingLevel,
+            &KeyMsg::from_type(KeyType::ShiftTab),
+        );
+
+        let session_guard = app.session.try_lock().expect("session lock");
+        assert_eq!(session_guard.header.thinking_level, None);
+        let thinking_changes = session_guard
+            .entries_for_current_path()
+            .iter()
+            .filter(|entry| matches!(entry, crate::session::SessionEntry::ThinkingLevelChange(_)))
+            .count();
+        assert_eq!(thinking_changes, 0);
+        drop(session_guard);
+
+        assert_eq!(app.status_message.as_deref(), Some("Agent busy; try again"));
     }
 
     #[test]
