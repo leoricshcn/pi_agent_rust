@@ -26,6 +26,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 
 /// A conformance test fixture file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,6 +50,9 @@ pub struct TestCase {
     /// Optional description
     #[serde(default)]
     pub description: String,
+    /// Specification requirement IDs this case covers.
+    #[serde(default)]
+    pub requirement_ids: Vec<String>,
     /// Setup steps to run before the test
     #[serde(default)]
     pub setup: Vec<SetupStep>,
@@ -65,6 +69,16 @@ pub struct TestCase {
     /// Tags for filtering tests
     #[serde(default)]
     pub tags: Vec<String>,
+}
+
+impl TestCase {
+    pub fn display_name(&self) -> String {
+        if self.requirement_ids.is_empty() {
+            self.name.clone()
+        } else {
+            format!("[{}] {}", self.requirement_ids.join(", "), self.name)
+        }
+    }
 }
 
 /// Setup steps for test initialization.
@@ -97,12 +111,18 @@ pub struct Expected {
     /// Content must match this regex
     #[serde(default)]
     pub content_regex: Option<String>,
+    /// Content must exactly match the committed golden text file.
+    #[serde(default)]
+    pub content_golden: Option<String>,
     /// Details must contain these key-value pairs
     #[serde(default)]
     pub details: HashMap<String, serde_json::Value>,
     /// Details values that must match exactly
     #[serde(default)]
     pub details_exact: HashMap<String, serde_json::Value>,
+    /// Details must exactly match the committed golden JSON file.
+    #[serde(default)]
+    pub details_golden: Option<String>,
     /// Require that tool returned no details (i.e., `details` is None).
     #[serde(default)]
     pub details_none: bool,
@@ -149,6 +169,32 @@ pub fn load_fixture(name: &str) -> std::io::Result<FixtureFile> {
     let content = std::fs::read_to_string(&path)?;
     serde_json::from_str(&content)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+fn conformance_golden_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/conformance/goldens")
+}
+
+fn resolve_golden_path(relative: &str) -> Result<PathBuf, String> {
+    let relative_path = Path::new(relative);
+    if relative_path.is_absolute() {
+        return Err(format!(
+            "Golden path must be relative to tests/conformance/goldens: {relative}"
+        ));
+    }
+
+    for component in relative_path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "Golden path must not escape tests/conformance/goldens: {relative}"
+                ));
+            }
+        }
+    }
+
+    Ok(conformance_golden_root().join(relative_path))
 }
 
 /// Validate expected results against actual tool output.
@@ -199,7 +245,10 @@ pub fn validate_expected(
         if details.is_some() {
             return Err("Expected details to be None but tool returned Some".to_string());
         }
-        if !expected.details.is_empty() || !expected.details_exact.is_empty() {
+        if !expected.details.is_empty()
+            || !expected.details_exact.is_empty()
+            || expected.details_golden.is_some()
+        {
             return Err(
                 "Invalid fixture: details_none cannot be combined with details expectations"
                     .to_string(),
@@ -253,6 +302,62 @@ pub fn validate_expected(
     Ok(())
 }
 
+pub fn validate_expected_with_goldens(
+    expected: &Expected,
+    content: &str,
+    details: Option<&serde_json::Value>,
+) -> Result<(), String> {
+    validate_expected(expected, content, details)?;
+
+    if let Some(relative_path) = &expected.content_golden {
+        let golden_path = resolve_golden_path(relative_path)?;
+        let golden_content = std::fs::read_to_string(&golden_path).map_err(|err| {
+            format!(
+                "Failed to read content golden '{}': {err}",
+                golden_path.display()
+            )
+        })?;
+        if content != golden_content {
+            return Err(format!(
+                "Content mismatch against golden '{}'.\nExpected:\n{}\nActual:\n{}",
+                golden_path.display(),
+                golden_content,
+                content
+            ));
+        }
+    }
+
+    if let Some(relative_path) = &expected.details_golden {
+        let actual_details = details.ok_or_else(|| {
+            format!("Expected details golden '{relative_path}' but tool returned None")
+        })?;
+        let golden_path = resolve_golden_path(relative_path)?;
+        let golden_content = std::fs::read_to_string(&golden_path).map_err(|err| {
+            format!(
+                "Failed to read details golden '{}': {err}",
+                golden_path.display()
+            )
+        })?;
+        let golden_details: serde_json::Value =
+            serde_json::from_str(&golden_content).map_err(|err| {
+                format!(
+                    "Invalid JSON in details golden '{}': {err}",
+                    golden_path.display()
+                )
+            })?;
+        if actual_details != &golden_details {
+            return Err(format!(
+                "Details mismatch against golden '{}'.\nExpected:\n{}\nActual:\n{}",
+                golden_path.display(),
+                serde_json::to_string_pretty(&golden_details).unwrap_or_default(),
+                serde_json::to_string_pretty(actual_details).unwrap_or_default()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +396,75 @@ mod tests {
 
         let wrong_details = serde_json::json!({"count": 10});
         assert!(validate_expected(&expected, "", Some(&wrong_details)).is_err());
+    }
+
+    #[test]
+    fn test_display_name_includes_requirement_ids() {
+        let case = TestCase {
+            name: "defaults".to_string(),
+            description: String::new(),
+            requirement_ids: vec!["CLI-DEFAULTS".to_string(), "CLI-SHAPE".to_string()],
+            setup: Vec::new(),
+            input: serde_json::json!({}),
+            expected: Expected::default(),
+            expect_error: false,
+            error_contains: None,
+            tags: Vec::new(),
+        };
+
+        assert_eq!(case.display_name(), "[CLI-DEFAULTS, CLI-SHAPE] defaults");
+    }
+
+    #[test]
+    fn test_validate_expected_with_details_golden() {
+        let expected = Expected {
+            details_golden: Some("cli_flags/defaults.json".to_string()),
+            ..Default::default()
+        };
+        let details_path = conformance_golden_root().join("cli_flags/defaults.json");
+        let details: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(details_path).expect("read defaults golden"),
+        )
+        .expect("parse defaults golden");
+
+        assert!(validate_expected_with_goldens(&expected, "", Some(&details)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_expected_with_content_golden() {
+        let golden_path = conformance_golden_root().join("cli_flags/defaults.json");
+        let golden_content =
+            std::fs::read_to_string(golden_path).expect("read content golden fixture");
+        let expected = Expected {
+            content_golden: Some("cli_flags/defaults.json".to_string()),
+            ..Default::default()
+        };
+
+        assert!(validate_expected_with_goldens(&expected, &golden_content, None).is_ok());
+    }
+
+    #[test]
+    fn test_validate_expected_rejects_details_none_with_details_golden() {
+        let expected = Expected {
+            details_none: true,
+            details_golden: Some("cli_flags/defaults.json".to_string()),
+            ..Default::default()
+        };
+
+        let err = validate_expected_with_goldens(&expected, "", None)
+            .expect_err("details_none must reject details goldens");
+        assert!(err.contains("details_none"));
+    }
+
+    #[test]
+    fn test_validate_expected_rejects_parent_dir_golden_path() {
+        let expected = Expected {
+            content_golden: Some("../escape.txt".to_string()),
+            ..Default::default()
+        };
+
+        let err =
+            validate_expected_with_goldens(&expected, "", None).expect_err("must reject escape");
+        assert!(err.contains("must not escape"));
     }
 }

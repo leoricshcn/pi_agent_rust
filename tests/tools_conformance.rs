@@ -1227,6 +1227,182 @@ fn duration_millis_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+fn normalize_tool_diagnostic_value(value: &mut serde_json::Value, workspace_root: &str) {
+    match value {
+        serde_json::Value::String(text) => {
+            if !workspace_root.is_empty() && text.contains(workspace_root) {
+                *text = text.replace(workspace_root, "<WORKSPACE_ROOT>");
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                normalize_tool_diagnostic_value(item, workspace_root);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values_mut() {
+                normalize_tool_diagnostic_value(value, workspace_root);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
+}
+
+fn normalize_tool_diagnostic_for_snapshot(mut diagnostic: serde_json::Value) -> serde_json::Value {
+    let workspace_root = diagnostic
+        .get("workspace_root")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    normalize_tool_diagnostic_value(&mut diagnostic, &workspace_root);
+
+    if let Some(object) = diagnostic.as_object_mut() {
+        object.insert("captured_epoch_ms".to_string(), serde_json::json!(0));
+        object.insert(
+            "allowlisted_env".to_string(),
+            serde_json::json!({"_normalized": "environment-dependent"}),
+        );
+    }
+
+    if let Some(timing) = diagnostic
+        .get_mut("timing_ms")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for value in timing.values_mut() {
+            *value = serde_json::json!(0);
+        }
+    }
+
+    if let Some(entries) = diagnostic
+        .pointer_mut("/workspace_snapshot/entries")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for entry in entries {
+            if let Some(entry_object) = entry.as_object_mut() {
+                if entry_object.contains_key("permissions_octal") {
+                    entry_object.insert(
+                        "permissions_octal".to_string(),
+                        serde_json::json!("<PERMISSIONS>"),
+                    );
+                }
+            }
+        }
+    }
+
+    diagnostic
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn normalize_tool_diagnostic_snapshot_is_invariant_to_noise() {
+    let baseline = serde_json::json!({
+        "schema": TOOL_DIAGNOSTIC_SCHEMA,
+        "test": "diagnostic-normalization",
+        "tool_name": "read",
+        "tool_call_id": "diag-001",
+        "cwd": "/tmp/pi-a/project/subdir",
+        "workspace_root": "/tmp/pi-a/project",
+        "captured_epoch_ms": 1_700_000_000_000u64,
+        "timing_ms": {
+            "tool_execute": 12,
+            "workspace_snapshot": 7,
+            "diagnostics_capture": 19
+        },
+        "allowlisted_env": {
+            "HOME": "/home/alice",
+            "TMPDIR": "/tmp/pi-a/project/tmp"
+        },
+        "command_transcript": {
+            "input": {
+                "path": "/tmp/pi-a/project/data/sample.txt"
+            },
+            "output": {
+                "summary": "read /tmp/pi-a/project/data/sample.txt",
+                "nested": [
+                    "/tmp/pi-a/project/data/sample.txt",
+                    {
+                        "config": "/tmp/pi-a/project/.pi/settings.json"
+                    }
+                ]
+            }
+        },
+        "workspace_snapshot": {
+            "entries": [
+                {
+                    "path": "/tmp/pi-a/project/data/sample.txt",
+                    "permissions_octal": "644"
+                },
+                {
+                    "path": "/tmp/pi-a/project/.pi/settings.json",
+                    "permissions_octal": "600"
+                }
+            ]
+        }
+    });
+    let noisy_variant = serde_json::json!({
+        "schema": TOOL_DIAGNOSTIC_SCHEMA,
+        "test": "diagnostic-normalization",
+        "tool_name": "read",
+        "tool_call_id": "diag-001",
+        "cwd": "/var/tmp/pi-b/project/subdir",
+        "workspace_root": "/var/tmp/pi-b/project",
+        "captured_epoch_ms": 1_800_000_123_456u64,
+        "timing_ms": {
+            "tool_execute": 99,
+            "workspace_snapshot": 33,
+            "diagnostics_capture": 144
+        },
+        "allowlisted_env": {
+            "HOME": "/Users/bob",
+            "TMPDIR": "/var/tmp/pi-b/project/tmp"
+        },
+        "command_transcript": {
+            "input": {
+                "path": "/var/tmp/pi-b/project/data/sample.txt"
+            },
+            "output": {
+                "summary": "read /var/tmp/pi-b/project/data/sample.txt",
+                "nested": [
+                    "/var/tmp/pi-b/project/data/sample.txt",
+                    {
+                        "config": "/var/tmp/pi-b/project/.pi/settings.json"
+                    }
+                ]
+            }
+        },
+        "workspace_snapshot": {
+            "entries": [
+                {
+                    "path": "/var/tmp/pi-b/project/data/sample.txt",
+                    "permissions_octal": "755"
+                },
+                {
+                    "path": "/var/tmp/pi-b/project/.pi/settings.json",
+                    "permissions_octal": "700"
+                }
+            ]
+        }
+    });
+
+    let normalized_baseline = normalize_tool_diagnostic_for_snapshot(baseline);
+    let normalized_variant = normalize_tool_diagnostic_for_snapshot(noisy_variant);
+
+    assert_eq!(normalized_baseline, normalized_variant);
+    assert_eq!(normalized_baseline["captured_epoch_ms"], serde_json::json!(0));
+    assert_eq!(
+        normalized_baseline["allowlisted_env"],
+        serde_json::json!({"_normalized": "environment-dependent"})
+    );
+    assert_eq!(
+        normalized_baseline["workspace_root"],
+        serde_json::json!("<WORKSPACE_ROOT>")
+    );
+    assert_eq!(
+        normalized_baseline["workspace_snapshot"]["entries"][0]["permissions_octal"],
+        serde_json::json!("<PERMISSIONS>")
+    );
+}
+
 async fn execute_tool_with_diagnostics<T: Tool + ?Sized>(
     harness: &TestHarness,
     tool: &T,
@@ -1477,6 +1653,47 @@ mod e2e_read {
                     .unwrap_or(0)
                     >= total_lines as u64
             );
+        });
+    }
+
+    #[test]
+    fn e2e_read_diagnostic_artifact_matches_golden_contract() {
+        asupersync::test_utils::run_test(|| async {
+            let harness = TestHarness::new("e2e_read_diagnostic_artifact_matches_golden_contract");
+            let path = harness.create_file("sample.txt", b"alpha\nbeta\ngamma");
+            let tool = pi::tools::ReadTool::new(harness.temp_dir());
+            let input = serde_json::json!({
+                "path": path.to_string_lossy()
+            });
+
+            let result =
+                execute_tool_with_diagnostics(&harness, &tool, "read", "read-golden-001", input)
+                    .await;
+
+            let output = result.expect("read golden probe should succeed");
+            let text = get_text_content(&output.content);
+            assert!(text.contains("alpha"));
+            assert!(text.contains("gamma"));
+
+            let artifacts = harness.log().artifacts();
+            let diagnostic_artifact = artifacts
+                .iter()
+                .find(|entry| entry.name == "tool-diagnostic:read-golden-001")
+                .expect("expected diagnostics artifact entry");
+            let diagnostic_body = std::fs::read_to_string(&diagnostic_artifact.path)
+                .expect("expected diagnostics artifact file to be readable");
+            let diagnostic_json: serde_json::Value =
+                serde_json::from_str(&diagnostic_body).expect("expected valid diagnostics JSON");
+            let normalized = normalize_tool_diagnostic_for_snapshot(diagnostic_json);
+            let pretty = serde_json::to_string_pretty(&normalized)
+                .expect("normalized diagnostic should serialize");
+
+            let normalized_path = harness.temp_path("tool-diagnostic-read.normalized.json");
+            std::fs::write(&normalized_path, &pretty)
+                .expect("write normalized diagnostic artifact");
+            harness.record_artifact("tool-diagnostic:read-golden-normalized", &normalized_path);
+
+            insta::assert_snapshot!("tool_diagnostic_read_success", pretty);
         });
     }
 }

@@ -2,7 +2,9 @@
 //!
 //! This module provides the infrastructure to run tests defined in JSON fixture files.
 
-use crate::conformance::{FixtureFile, SetupStep, TestCase, TestResult, validate_expected};
+use crate::conformance::{
+    FixtureFile, SetupStep, TestCase, TestResult, validate_expected_with_goldens,
+};
 use clap::{Parser, error::ErrorKind};
 use pi::cli::{Cli, Commands};
 use pi::model::ContentBlock;
@@ -25,21 +27,23 @@ pub async fn run_fixture_tests(fixture: &FixtureFile) -> Vec<TestResult> {
 
 /// Run a single test case.
 async fn run_test_case(tool_name: &str, case: &TestCase) -> TestResult {
+    let case_name = case.display_name();
+
     if tool_name == "cli_flags" {
-        return run_cli_test_case(case);
+        return run_cli_test_case(case, &case_name);
     }
 
     // Create a temporary directory for the test
     let temp_dir = match TempDir::new() {
         Ok(dir) => dir,
         Err(e) => {
-            return TestResult::fail(&case.name, format!("Failed to create temp dir: {e}"));
+            return TestResult::fail(&case_name, format!("Failed to create temp dir: {e}"));
         }
     };
 
     // Run setup steps
     if let Err(e) = run_setup_steps(&case.setup, temp_dir.path()) {
-        return TestResult::fail(&case.name, format!("Setup failed: {e}"));
+        return TestResult::fail(&case_name, format!("Setup failed: {e}"));
     }
 
     // Create the tool
@@ -52,7 +56,7 @@ async fn run_test_case(tool_name: &str, case: &TestCase) -> TestResult {
         "find" => Box::new(pi::tools::FindTool::new(temp_dir.path())),
         "ls" => Box::new(pi::tools::LsTool::new(temp_dir.path())),
         _ => {
-            return TestResult::fail(&case.name, format!("Unknown tool: {tool_name}"));
+            return TestResult::fail(&case_name, format!("Unknown tool: {tool_name}"));
         }
     };
 
@@ -69,19 +73,19 @@ async fn run_test_case(tool_name: &str, case: &TestCase) -> TestResult {
                         .to_lowercase()
                         .contains(&expected_substr.to_lowercase())
                     {
-                        return TestResult::pass(&case.name);
+                        return TestResult::pass(&case_name);
                     }
                     return TestResult::fail(
-                        &case.name,
+                        &case_name,
                         format!(
                             "Error message '{error_msg}' does not contain expected '{expected_substr}'"
                         ),
                     );
                 }
-                return TestResult::pass(&case.name);
+                return TestResult::pass(&case_name);
             }
             Ok(_) => {
-                return TestResult::fail(&case.name, "Expected error but tool succeeded");
+                return TestResult::fail(&case_name, "Expected error but tool succeeded");
             }
         }
     }
@@ -90,7 +94,7 @@ async fn run_test_case(tool_name: &str, case: &TestCase) -> TestResult {
     let output = match result {
         Ok(o) => o,
         Err(e) => {
-            return TestResult::fail(&case.name, format!("Unexpected error: {e}"));
+            return TestResult::fail(&case_name, format!("Unexpected error: {e}"));
         }
     };
 
@@ -98,15 +102,15 @@ async fn run_test_case(tool_name: &str, case: &TestCase) -> TestResult {
     let content = extract_text_content(&output.content);
 
     // Validate expected results
-    match validate_expected(&case.expected, &content, output.details.as_ref()) {
+    match validate_expected_with_goldens(&case.expected, &content, output.details.as_ref()) {
         Ok(()) => {
-            let mut result = TestResult::pass(&case.name);
+            let mut result = TestResult::pass(&case_name);
             result.actual_content = Some(content);
             result.actual_details = output.details;
             result
         }
         Err(msg) => {
-            let mut result = TestResult::fail(&case.name, msg);
+            let mut result = TestResult::fail(&case_name, msg);
             result.actual_content = Some(content);
             result.actual_details = output.details;
             result
@@ -114,7 +118,7 @@ async fn run_test_case(tool_name: &str, case: &TestCase) -> TestResult {
     }
 }
 
-fn run_cli_test_case(case: &TestCase) -> TestResult {
+fn run_cli_test_case(case: &TestCase, case_name: &str) -> TestResult {
     let args = case
         .input
         .get("args")
@@ -161,36 +165,36 @@ fn run_cli_test_case(case: &TestCase) -> TestResult {
                         .to_lowercase()
                         .contains(&expected_substr.to_lowercase())
                     {
-                        return TestResult::pass(&case.name);
+                        return TestResult::pass(case_name);
                     }
                     return TestResult::fail(
-                        &case.name,
+                        case_name,
                         format!(
                             "Error message '{error_msg}' does not contain expected '{expected_substr}'"
                         ),
                     );
                 }
-                return TestResult::pass(&case.name);
+                return TestResult::pass(case_name);
             }
             None => {
-                return TestResult::fail(&case.name, "Expected error but CLI parsed successfully");
+                return TestResult::fail(case_name, "Expected error but CLI parsed successfully");
             }
         }
     }
 
     if let Some(error_msg) = parse_error {
-        return TestResult::fail(&case.name, format!("Unexpected CLI error: {error_msg}"));
+        return TestResult::fail(case_name, format!("Unexpected CLI error: {error_msg}"));
     }
 
-    match validate_expected(&case.expected, &content, details.as_ref()) {
+    match validate_expected_with_goldens(&case.expected, &content, details.as_ref()) {
         Ok(()) => {
-            let mut result = TestResult::pass(&case.name);
+            let mut result = TestResult::pass(case_name);
             result.actual_content = Some(content);
             result.actual_details = details;
             result
         }
         Err(msg) => {
-            let mut result = TestResult::fail(&case.name, msg);
+            let mut result = TestResult::fail(case_name, msg);
             result.actual_content = Some(content);
             result.actual_details = details;
             result
@@ -213,21 +217,31 @@ fn cli_details(cli: &Cli) -> Value {
         "session": cli.session.clone(),
         "session_dir": cli.session_dir.clone(),
         "no_session": cli.no_session,
+        "session_durability": cli.session_durability.clone(),
+        "no_migrations": cli.no_migrations,
         "mode": cli.mode.clone(),
         "print": cli.print,
+        "acp": cli.acp,
         "verbose": cli.verbose,
         "no_tools": cli.no_tools,
         "tools": cli.tools.clone(),
         "extension": cli.extension.clone(),
         "no_extensions": cli.no_extensions,
+        "extension_policy": cli.extension_policy.clone(),
+        "explain_extension_policy": cli.explain_extension_policy,
+        "repair_policy": cli.repair_policy.clone(),
+        "explain_repair_policy": cli.explain_repair_policy,
         "skill": cli.skill.clone(),
         "no_skills": cli.no_skills,
         "prompt_template": cli.prompt_template.clone(),
         "no_prompt_templates": cli.no_prompt_templates,
         "theme": cli.theme.clone(),
+        "theme_path": cli.theme_path.clone(),
         "no_themes": cli.no_themes,
+        "hide_cwd_in_prompt": cli.hide_cwd_in_prompt,
         "export": cli.export.clone(),
         "list_models": list_models_value(cli.list_models.as_ref()),
+        "list_providers": cli.list_providers,
         "command": command_value(cli.command.as_ref()),
         "file_args": cli
             .file_args()
@@ -382,6 +396,8 @@ pub fn run_truncation_tests(fixture: &FixtureFile) -> Vec<TestResult> {
 fn run_truncation_test_case(case: &TestCase) -> TestResult {
     use pi::tools::{truncate_head, truncate_tail};
 
+    let case_name = case.display_name();
+
     let content = case.input["content"].as_str().unwrap_or("");
     let max_lines =
         usize::try_from(case.input["max_lines"].as_u64().unwrap_or(2000)).unwrap_or(2000);
@@ -410,15 +426,15 @@ fn run_truncation_test_case(case: &TestCase) -> TestResult {
         "last_line_partial": result.last_line_partial,
     });
 
-    match validate_expected(&case.expected, &result.content, Some(&details)) {
+    match validate_expected_with_goldens(&case.expected, &result.content, Some(&details)) {
         Ok(()) => {
-            let mut test_result = TestResult::pass(&case.name);
+            let mut test_result = TestResult::pass(&case_name);
             test_result.actual_content = Some(result.content);
             test_result.actual_details = Some(details);
             test_result
         }
         Err(msg) => {
-            let mut test_result = TestResult::fail(&case.name, msg);
+            let mut test_result = TestResult::fail(&case_name, msg);
             test_result.actual_content = Some(result.content);
             test_result.actual_details = Some(details);
             test_result

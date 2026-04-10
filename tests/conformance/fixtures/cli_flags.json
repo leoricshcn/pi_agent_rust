@@ -5,21 +5,11 @@
   "cases": [
     {
       "name": "defaults",
+      "description": "Default CLI parse shape stays stable as new flags are added",
+      "requirement_ids": ["CLI-FLAGS-DEFAULTS", "CLI-FLAGS-FULL-SHAPE"],
       "input": { "args": [] },
       "expected": {
-        "details_exact": {
-          "version": false,
-          "print": false,
-          "no_session": false,
-          "no_tools": false,
-          "tools": "read,bash,edit,write,grep,find,ls,hashline_edit",
-          "no_extensions": false,
-          "no_skills": false,
-          "no_prompt_templates": false,
-          "no_themes": false,
-          "command": null,
-          "list_models": null
-        }
+        "details_golden": "cli_flags/defaults.json"
       }
     },
     {
@@ -136,6 +126,43 @@
           "no_prompt_templates": true,
           "theme": "theme1",
           "no_themes": true
+        }
+      }
+    },
+    {
+      "name": "policy_and_surface_control_flags",
+      "description": "Newer policy and surface flags remain covered by conformance fixtures",
+      "requirement_ids": ["CLI-FLAGS-POLICY-AND-SURFACE"],
+      "input": {
+        "args": [
+          "--session-durability",
+          "strict",
+          "--no-migrations",
+          "--acp",
+          "--extension-policy",
+          "balanced",
+          "--explain-extension-policy",
+          "--repair-policy",
+          "auto-safe",
+          "--explain-repair-policy",
+          "--theme-path",
+          "themes/custom",
+          "--hide-cwd-in-prompt",
+          "--list-providers"
+        ]
+      },
+      "expected": {
+        "details_exact": {
+          "session_durability": "strict",
+          "no_migrations": true,
+          "acp": true,
+          "extension_policy": "balanced",
+          "explain_extension_policy": true,
+          "repair_policy": "auto-safe",
+          "explain_repair_policy": true,
+          "theme_path": ["themes/custom"],
+          "hide_cwd_in_prompt": true,
+          "list_providers": true
         }
       }
     },
