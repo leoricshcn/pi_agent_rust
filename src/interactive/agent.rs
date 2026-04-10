@@ -1980,11 +1980,15 @@ mod stream_delta_batcher_tests {
             theme_paths: Vec::new(),
         };
         let (event_tx, event_rx) = asupersync::channel::mpsc::channel(64);
+        let config = Config {
+            last_changelog_version: Some(crate::platform::VERSION.to_string()),
+            ..Config::default()
+        };
         (
             PiApp::new(
                 agent,
                 session,
-                Config::default(),
+                config,
                 resources,
                 resource_cli,
                 Path::new(".").to_path_buf(),
@@ -1995,6 +1999,7 @@ mod stream_delta_batcher_tests {
                 event_tx,
                 runtime_handle(),
                 true,
+                false,
                 None,
                 Some(KeyBindings::new()),
                 Vec::new(),

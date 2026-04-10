@@ -106,7 +106,7 @@ fn dummy_model_entry() -> ModelEntry {
 
 fn build_app(harness: &TestHarness, extensions: Option<ExtensionManager>) -> PiApp {
     let cwd = harness.temp_dir().to_path_buf();
-    let config = Config::default();
+    let config = common::hermetic_interactive_config(Config::default());
     let tools = ToolRegistry::new(&[], &cwd, Some(&config));
     let provider: Arc<dyn Provider> = Arc::new(DummyProvider);
     let agent = Agent::new(provider, tools, AgentConfig::default());
@@ -141,6 +141,7 @@ fn build_app(harness: &TestHarness, extensions: Option<ExtensionManager>) -> PiA
         Vec::new(),
         event_tx,
         test_runtime_handle(),
+        false,
         false,
         extensions,
         Some(KeyBindings::new()),

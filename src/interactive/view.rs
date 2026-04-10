@@ -330,6 +330,53 @@ impl PiApp {
             .map_or_else(|| fallback.to_string(), std::string::ToString::to_string)
     }
 
+    fn render_startup_placeholder(&self) -> String {
+        let mut output = String::new();
+        let plain_width = self.term_width.saturating_sub(4).max(1);
+
+        if !self.startup_welcome.trim().is_empty() {
+            for line in self.startup_welcome.lines() {
+                if line.trim().is_empty() {
+                    output.push('\n');
+                    continue;
+                }
+                for segment in wrapped_line_segments(line, plain_width) {
+                    let _ = writeln!(output, "{}", self.styles.muted_italic.render(segment));
+                }
+            }
+        }
+
+        match &self.startup_changelog {
+            Some(StartupChangelog::Condensed { latest_version }) => {
+                if !output.is_empty() && !output.ends_with('\n') {
+                    output.push('\n');
+                }
+                let message =
+                    format!("Updated to v{latest_version}. Use /changelog to view full changelog.");
+                for segment in wrapped_line_segments(&message, plain_width) {
+                    let _ = writeln!(output, "  {}", self.styles.warning.render(segment));
+                }
+            }
+            Some(StartupChangelog::Full { markdown }) => {
+                if !output.is_empty() && !output.ends_with('\n') {
+                    output.push('\n');
+                }
+                let _ = writeln!(output, "  {}", self.styles.accent_bold.render("What's New"));
+                output.push('\n');
+                let rendered = glamour::Renderer::new()
+                    .with_style_config(self.markdown_style.clone())
+                    .with_word_wrap(self.term_width.saturating_sub(6).max(40))
+                    .render(markdown);
+                for line in rendered.lines() {
+                    let _ = writeln!(output, "  {line}");
+                }
+            }
+            None => {}
+        }
+
+        output.trim_end().to_string()
+    }
+
     /// Render the view.
     #[allow(clippy::too_many_lines)]
     pub(super) fn view(&self) -> String {
@@ -386,7 +433,7 @@ impl PiApp {
             // the reusable buffer is always returned regardless of path.
             use std::borrow::Cow;
             let viewport_content: Cow<'_, str> = if conversation_content.is_empty() {
-                Cow::Owned(self.styles.muted_italic.render(&self.startup_welcome))
+                Cow::Owned(self.render_startup_placeholder())
             } else {
                 Cow::Borrowed(&conversation_content)
             };
@@ -576,7 +623,8 @@ impl PiApp {
         let prev_model_key =
             self.header_binding_hint(AppAction::CycleModelBackward, "ctrl+shift+p");
         let tools_key = self.header_binding_hint(AppAction::ExpandTools, "ctrl+o");
-        let thinking_key = self.header_binding_hint(AppAction::ToggleThinking, "ctrl+t");
+        let thinking_key =
+            self.header_binding_hint(AppAction::CycleThinkingLevel, "shift+tab");
         let max_width = self.term_width.saturating_sub(2);
 
         let hints_line = truncate(
@@ -1145,7 +1193,9 @@ impl PiApp {
                         border_style.render(&format!(
                             "{:>pad$}│",
                             "",
-                            pad = width.saturating_sub(2).saturating_sub(truncated_desc.width())
+                            pad = width
+                                .saturating_sub(2)
+                                .saturating_sub(truncated_desc.width())
                         ))
                     );
                 }

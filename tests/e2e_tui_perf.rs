@@ -112,7 +112,7 @@ fn dummy_model_entry() -> ModelEntry {
 
 fn build_perf_app(harness: &TestHarness, messages: Vec<ConversationMessage>) -> PiApp {
     let cwd = harness.temp_dir().to_path_buf();
-    let config = Config::default();
+    let config = common::hermetic_interactive_config(Config::default());
     let tools = ToolRegistry::new(&[], &cwd, Some(&config));
     let provider: Arc<dyn Provider> = Arc::new(DummyProvider);
     let agent = Agent::new(provider, tools, AgentConfig::default());
@@ -143,6 +143,7 @@ fn build_perf_app(harness: &TestHarness, messages: Vec<ConversationMessage>) -> 
         Vec::new(),
         event_tx,
         test_runtime_handle(),
+        false,
         false,
         None,
         Some(KeyBindings::new()),

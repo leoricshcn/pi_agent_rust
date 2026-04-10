@@ -468,6 +468,66 @@ impl PiApp {
         });
     }
 
+    pub(super) fn cycle_thinking_level(&mut self) {
+        let levels = self.model_entry.available_thinking_levels();
+        if levels.len() <= 1 {
+            self.status_message = Some("Current model does not support thinking".to_string());
+            return;
+        }
+
+        let current = self
+            .session
+            .try_lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .header
+                    .thinking_level
+                    .as_deref()
+                    .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok())
+            })
+            .or_else(|| {
+                self.agent
+                    .try_lock()
+                    .ok()
+                    .and_then(|guard| guard.stream_options().thinking_level)
+            })
+            .unwrap_or_default();
+
+        let current_index = levels
+            .iter()
+            .position(|level| *level == current)
+            .unwrap_or(0);
+        let next = levels[(current_index + 1) % levels.len()];
+
+        let changed = if let Ok(mut session_guard) = self.session.try_lock() {
+            let previous_level = session_guard
+                .header
+                .thinking_level
+                .as_deref()
+                .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok());
+            session_guard.header.thinking_level = Some(next.to_string());
+            let changed = previous_level != Some(next);
+            if changed {
+                session_guard.append_thinking_level_change(next.to_string());
+            }
+            changed
+        } else {
+            self.status_message = Some("Session busy; try again".to_string());
+            return;
+        };
+
+        if changed {
+            self.spawn_save_session();
+        }
+
+        if let Ok(mut agent_guard) = self.agent.try_lock() {
+            agent_guard.stream_options_mut().thinking_level = Some(next);
+        }
+
+        self.status_message = Some(format!("Thinking level: {next}"));
+    }
+
     pub(super) fn quit_cmd(&mut self) -> Cmd {
         if let Some(manager) = &self.extensions {
             manager.clear_ui_sender();
@@ -624,6 +684,10 @@ impl PiApp {
             }
             AppAction::CycleModelBackward => {
                 self.cycle_model(-1);
+                None
+            }
+            AppAction::CycleThinkingLevel => {
+                self.cycle_thinking_level();
                 None
             }
             AppAction::SelectModel => {
@@ -845,14 +909,9 @@ impl PiApp {
                 None
             }
 
-            // =========================================================
-            // Actions not yet implemented - let through to component
-            // =========================================================
-            _ => {
-                // Many actions (editor operations, model cycling, etc.) will be
-                // implemented in future PRs. For now, don't consume them.
-                None
-            }
+            // Editor-native and picker-specific actions fall through to the
+            // focused component when PiApp does not need to intercept them.
+            _ => None,
         }
     }
 
@@ -883,6 +942,7 @@ impl PiApp {
             | AppAction::PageDown
             | AppAction::CycleModelForward
             | AppAction::CycleModelBackward
+            | AppAction::CycleThinkingLevel
             | AppAction::ToggleThinking
             | AppAction::ExpandTools
             | AppAction::FollowUp
@@ -1086,11 +1146,15 @@ mod tests {
             theme_paths: Vec::new(),
         };
         let (event_tx, event_rx) = mpsc::channel(64);
+        let config = Config {
+            last_changelog_version: Some(crate::platform::VERSION.to_string()),
+            ..Config::default()
+        };
         (
             PiApp::new(
                 agent,
                 session,
-                Config::default(),
+                config,
                 resources,
                 resource_cli,
                 Path::new(".").to_path_buf(),
@@ -1100,6 +1164,7 @@ mod tests {
                 Vec::new(),
                 event_tx,
                 runtime_handle(),
+                false,
                 false,
                 None,
                 Some(KeyBindings::new()),
@@ -1304,6 +1369,82 @@ mod tests {
             thinking_changes, 1,
             "reapplying the same effective thinking level should not add duplicate history"
         );
+    }
+
+    #[test]
+    fn cycle_thinking_level_action_updates_runtime_and_session_state() {
+        let current = model_entry("openai", "gpt-5.2", Some("old-key"), HashMap::new());
+        let mut app = build_test_app(current.clone(), vec![current]);
+
+        app.handle_action(
+            AppAction::CycleThinkingLevel,
+            &KeyMsg::from_type(KeyType::ShiftTab),
+        );
+
+        let agent_guard = app.agent.try_lock().expect("agent lock");
+        assert_eq!(
+            agent_guard.stream_options().thinking_level,
+            Some(crate::model::ThinkingLevel::Minimal)
+        );
+        drop(agent_guard);
+
+        let session_guard = app.session.try_lock().expect("session lock");
+        assert_eq!(
+            session_guard.header.thinking_level.as_deref(),
+            Some("minimal")
+        );
+        let thinking_changes = session_guard
+            .entries_for_current_path()
+            .iter()
+            .filter(|entry| matches!(entry, crate::session::SessionEntry::ThinkingLevelChange(_)))
+            .count();
+        assert_eq!(thinking_changes, 1);
+        drop(session_guard);
+
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Thinking level: minimal")
+        );
+    }
+
+    #[test]
+    fn cycle_thinking_level_action_reports_unsupported_models() {
+        let mut current = model_entry("ollama", "llama3.2", None, HashMap::new());
+        current.auth_header = false;
+        current.model.reasoning = false;
+        let mut app = build_test_app(current.clone(), vec![current]);
+
+        app.handle_action(
+            AppAction::CycleThinkingLevel,
+            &KeyMsg::from_type(KeyType::ShiftTab),
+        );
+
+        let agent_guard = app.agent.try_lock().expect("agent lock");
+        assert_eq!(agent_guard.stream_options().thinking_level, None);
+        drop(agent_guard);
+
+        let session_guard = app.session.try_lock().expect("session lock");
+        assert_eq!(session_guard.header.thinking_level, None);
+        let thinking_changes = session_guard
+            .entries_for_current_path()
+            .iter()
+            .filter(|entry| matches!(entry, crate::session::SessionEntry::ThinkingLevelChange(_)))
+            .count();
+        assert_eq!(thinking_changes, 0);
+        drop(session_guard);
+
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Current model does not support thinking")
+        );
+    }
+
+    #[test]
+    fn cycle_thinking_level_action_is_consumed_by_app() {
+        let current = model_entry("openai", "gpt-5.2", Some("old-key"), HashMap::new());
+        let app = build_test_app(current.clone(), vec![current]);
+
+        assert!(app.should_consume_action(AppAction::CycleThinkingLevel));
     }
 
     #[test]

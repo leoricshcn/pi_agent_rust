@@ -157,6 +157,7 @@ fn create_bench_app() -> PiApp {
         event_tx,
         bench_runtime_handle(),
         true,
+        false,
         None,
         Some(KeyBindings::new()),
         Vec::new(),

@@ -39,6 +39,27 @@ impl ModelEntry {
         )
     }
 
+    /// Return the thinking levels that should be exposed for this model.
+    pub fn available_thinking_levels(&self) -> Vec<crate::model::ThinkingLevel> {
+        use crate::model::ThinkingLevel;
+
+        if !self.model.reasoning {
+            return vec![ThinkingLevel::Off];
+        }
+
+        let mut levels = vec![
+            ThinkingLevel::Off,
+            ThinkingLevel::Minimal,
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+        ];
+        if self.supports_xhigh() {
+            levels.push(ThinkingLevel::XHigh);
+        }
+        levels
+    }
+
     /// Clamp a requested thinking level to the model's capabilities.
     ///
     /// Non-reasoning models always return `Off`. Models without xhigh support
@@ -3060,6 +3081,46 @@ mod tests {
         assert!(!make_model_entry("gpt-4o", true).supports_xhigh());
         assert!(!make_model_entry("claude-sonnet-4-20250514", true).supports_xhigh());
         assert!(!make_model_entry("gemini-2.5-pro", true).supports_xhigh());
+    }
+
+    #[test]
+    fn available_thinking_levels_non_reasoning_is_off_only() {
+        use crate::model::ThinkingLevel;
+        let entry = make_model_entry("gpt-4o-mini", false);
+        assert_eq!(entry.available_thinking_levels(), vec![ThinkingLevel::Off]);
+    }
+
+    #[test]
+    fn available_thinking_levels_reasoning_without_xhigh_stops_at_high() {
+        use crate::model::ThinkingLevel;
+        let entry = make_model_entry("claude-sonnet-4-20250514", true);
+        assert_eq!(
+            entry.available_thinking_levels(),
+            vec![
+                ThinkingLevel::Off,
+                ThinkingLevel::Minimal,
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High,
+            ]
+        );
+    }
+
+    #[test]
+    fn available_thinking_levels_reasoning_with_xhigh_includes_xhigh() {
+        use crate::model::ThinkingLevel;
+        let entry = make_model_entry("gpt-5.2", true);
+        assert_eq!(
+            entry.available_thinking_levels(),
+            vec![
+                ThinkingLevel::Off,
+                ThinkingLevel::Minimal,
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High,
+                ThinkingLevel::XHigh,
+            ]
+        );
     }
 
     // ─── clamp_thinking_level ────────────────────────────────────────

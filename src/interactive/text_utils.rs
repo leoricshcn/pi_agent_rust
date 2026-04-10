@@ -26,7 +26,7 @@ pub(super) fn truncate(s: &str, max_len: usize) -> String {
     let take_len = max_len - 3;
     let mut out = String::with_capacity(max_len);
     let mut current_width = 0;
-    
+
     for c in s.chars() {
         let w = c.width().unwrap_or(0);
         if current_width + w > take_len {
@@ -35,7 +35,7 @@ pub(super) fn truncate(s: &str, max_len: usize) -> String {
         out.push(c);
         current_width += w;
     }
-    
+
     out.push_str("...");
     out
 }

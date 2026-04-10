@@ -264,7 +264,7 @@ fn render_inline_bytes(
     max_cols: usize,
     protocol: ImageProtocol,
 ) -> String {
-    let dims = image_dimensions(&bytes);
+    let dims = image_dimensions(bytes);
     let placeholder = placeholder(mime_type, dims.map(|(w, _)| w), dims.map(|(_, h)| h));
 
     if bytes.is_empty() {

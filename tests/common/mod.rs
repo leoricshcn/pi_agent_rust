@@ -49,6 +49,19 @@ pub use logging::{
     redact_json_value, validate_jsonl, validate_jsonl_line,
 };
 
+/// Seed interactive test configs so `PiApp::new()` stays hermetic.
+///
+/// Startup changelog bootstrapping persists `lastChangelogVersion` on first run. Tests that use
+/// `Config::default()` do not want to mutate the real user config, so we mark the current version
+/// as already seen unless a test intentionally overrides it.
+#[allow(dead_code)]
+pub fn hermetic_interactive_config(mut config: pi::config::Config) -> pi::config::Config {
+    if config.last_changelog_version.is_none() {
+        config.last_changelog_version = Some(pi::platform::VERSION.to_string());
+    }
+    config
+}
+
 /// Runs an async future to completion on an asupersync runtime.
 ///
 /// Note: We spawn the future onto the runtime so it runs with a proper task context.

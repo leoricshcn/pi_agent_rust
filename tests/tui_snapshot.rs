@@ -97,6 +97,7 @@ fn build_app(harness: &TestHarness) -> PiApp {
 }
 
 fn build_app_with_config(harness: &TestHarness, config: Config) -> PiApp {
+    let config = common::hermetic_interactive_config(config);
     let cwd = harness.temp_dir().to_path_buf();
     let tools = ToolRegistry::new(&[], &cwd, Some(&config));
     let provider: Arc<dyn Provider> = Arc::new(DummyProvider);
@@ -132,6 +133,7 @@ fn build_app_with_config(harness: &TestHarness, config: Config) -> PiApp {
         event_tx,
         test_runtime_handle(),
         true,
+        false,
         None,
         Some(KeyBindings::new()),
         Vec::new(),

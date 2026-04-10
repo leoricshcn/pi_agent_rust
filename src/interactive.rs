@@ -53,6 +53,7 @@ use crate::model::{
 };
 use crate::models::{ModelEntry, ModelRegistry, default_models_path};
 use crate::package_manager::PackageManager;
+use crate::platform::VERSION;
 use crate::providers;
 use crate::resources::{DiagnosticKind, ResourceCliOptions, ResourceDiagnostic, ResourceLoader};
 use crate::session::{Session, SessionEntry, SessionMessage, bash_execution_to_text};
@@ -83,22 +84,11 @@ pub use self::commands::{
     SlashCommand, model_entry_matches, parse_scoped_model_patterns, resolve_scoped_model_entries,
     strip_thinking_level_suffix,
 };
-#[cfg(test)]
-use self::commands::{
-    api_key_login_prompt, format_login_provider_listing, format_resource_diagnostics, kind_rank,
-    normalize_api_key_input, normalize_auth_provider_input, remove_provider_credentials,
-    save_provider_credential,
-};
 use self::commands::{
     format_startup_oauth_hint, parse_bash_command, parse_extension_command,
     should_show_startup_oauth_hint,
 };
 use self::conversation::conversation_from_session;
-#[cfg(test)]
-use self::conversation::{
-    assistant_content_to_text, build_content_blocks_for_input, content_blocks_to_text,
-    split_content_blocks_for_input, tool_content_blocks_to_text, user_content_to_text,
-};
 use self::ext_session::{InteractiveExtensionHostActions, InteractiveExtensionSession};
 pub use self::ext_session::{format_extension_ui_prompt, parse_extension_ui_response};
 use self::file_refs::{
@@ -110,8 +100,6 @@ use self::perf::{
     CRITICAL_KEEP_MESSAGES, FrameTimingStats, MemoryLevel, MemoryMonitor, MessageRenderCache,
     RenderBuffers, micros_as_u64,
 };
-#[cfg(test)]
-use self::state::TOOL_AUTO_COLLAPSE_THRESHOLD;
 pub use self::state::{AgentState, InputMode, PendingInput};
 use self::state::{
     AutocompleteState, BranchPickerOverlay, CapabilityAction, CapabilityPromptOverlay,
@@ -121,12 +109,8 @@ use self::state::{
     ToolProgress, format_count,
 };
 pub use self::state::{ConversationMessage, MessageRole};
-#[cfg(test)]
-use self::text_utils::push_line;
 use self::text_utils::{queued_message_preview, truncate};
 use self::tool_render::{format_tool_output, render_tool_message};
-#[cfg(test)]
-use self::tool_render::{pretty_json, split_diff_prefix};
 use self::tree::{
     PendingTreeNavigation, TreeCustomPromptState, TreeSelectorState, TreeSummaryChoice,
     TreeSummaryPromptState, TreeUiState, collect_tree_branch_entries,
@@ -1426,13 +1410,33 @@ impl PiApp {
 
                     if let Some(resolved) = resolved {
                         file_args.push(resolved);
-                        if !trailing.is_empty()
-                            && cleaned.chars().last().is_some_and(char::is_whitespace)
+                        let mut next_idx = token_end;
+                        if !trailing.is_empty() {
+                            Self::trim_trailing_horizontal_whitespace(&mut cleaned);
+                        } else if message[next_idx..]
+                            .chars()
+                            .next()
+                            .is_some_and(Self::is_horizontal_whitespace)
                         {
-                            cleaned.pop();
+                            while message[next_idx..]
+                                .chars()
+                                .next()
+                                .is_some_and(Self::is_horizontal_whitespace)
+                            {
+                                next_idx +=
+                                    message[next_idx..].chars().next().map_or(0, char::len_utf8);
+                            }
+                        } else if Self::trailing_line_is_blank(&cleaned)
+                            && message[next_idx..]
+                                .chars()
+                                .next()
+                                .is_some_and(Self::is_linebreak)
+                        {
+                            Self::trim_trailing_horizontal_whitespace(&mut cleaned);
+                            next_idx += Self::consume_single_linebreak(message, next_idx);
                         }
                         cleaned.push_str(&trailing);
-                        idx = token_end;
+                        idx = next_idx;
                         continue;
                     }
                 }
@@ -1443,6 +1447,57 @@ impl PiApp {
         }
 
         (cleaned, file_args)
+    }
+
+    const fn is_linebreak(ch: char) -> bool {
+        matches!(ch, '\n' | '\r')
+    }
+
+    const fn is_horizontal_whitespace(ch: char) -> bool {
+        matches!(ch, ' ' | '\t')
+    }
+
+    fn trim_trailing_horizontal_whitespace(text: &mut String) {
+        while text
+            .chars()
+            .last()
+            .is_some_and(Self::is_horizontal_whitespace)
+        {
+            text.pop();
+        }
+    }
+
+    fn trailing_line_is_blank(text: &str) -> bool {
+        if let Some((line_start, linebreak)) = text
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| Self::is_linebreak(*ch))
+        {
+            let start = line_start + linebreak.len_utf8();
+            return text[start..].chars().all(Self::is_horizontal_whitespace);
+        }
+
+        text.chars().all(Self::is_horizontal_whitespace)
+    }
+
+    fn consume_single_linebreak(text: &str, start: usize) -> usize {
+        if start >= text.len() {
+            return 0;
+        }
+
+        let Some(first) = text[start..].chars().next() else {
+            return 0;
+        };
+        if !Self::is_linebreak(first) {
+            return 0;
+        }
+
+        let first_len = first.len_utf8();
+        if first == '\r' && text[start + first_len..].starts_with('\n') {
+            return first_len + '\n'.len_utf8();
+        }
+
+        first_len
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1689,6 +1744,7 @@ pub async fn run_interactive(
         event_tx,
         runtime_handle,
         save_enabled,
+        true,
         extensions,
         None,
         messages,
@@ -1891,6 +1947,215 @@ fn build_startup_welcome_message(config: &Config) -> String {
     message
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StartupChangelog {
+    Condensed { latest_version: String },
+    Full { markdown: String },
+}
+
+fn changelog_heading_matches_version(heading: &str, version: &str) -> bool {
+    let token = heading
+        .trim_start_matches('#')
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_matches(|ch| matches!(ch, '[' | ']' | '(' | ')'));
+
+    token == version || token == format!("v{version}")
+}
+
+fn collect_startup_changelog_sections(
+    changelog: &str,
+    current_version: &str,
+    last_seen_version: &str,
+) -> Option<String> {
+    let mut sections = Vec::new();
+    let mut current_section = Vec::new();
+    let mut collecting = false;
+    let mut saw_current_version = false;
+
+    for line in changelog.lines() {
+        if line.starts_with("## ") {
+            if collecting && !current_section.is_empty() {
+                sections.push(current_section.join("\n"));
+                current_section.clear();
+            }
+
+            if changelog_heading_matches_version(line, last_seen_version) {
+                break;
+            }
+
+            collecting =
+                saw_current_version || changelog_heading_matches_version(line, current_version);
+            if collecting {
+                saw_current_version = true;
+                current_section.push(line.to_string());
+            }
+            continue;
+        }
+
+        if collecting {
+            current_section.push(line.to_string());
+        }
+    }
+
+    if collecting && !current_section.is_empty() {
+        sections.push(current_section.join("\n"));
+    }
+
+    let combined = sections.join("\n\n");
+    let trimmed = combined.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn persist_last_changelog_version_with_roots(
+    global_dir: &Path,
+    cwd: &Path,
+    config_override: Option<&Path>,
+    version: &str,
+) -> crate::error::Result<PathBuf> {
+    let patch = json!({ "lastChangelogVersion": version });
+    if let Some(path) = config_override {
+        return Config::patch_settings_to_path(path, patch);
+    }
+
+    Config::patch_settings_with_roots(SettingsScope::Global, global_dir, cwd, patch)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_startup_changelog_with_roots(
+    config: &mut Config,
+    global_dir: &Path,
+    cwd: &Path,
+    config_override: Option<&Path>,
+    has_existing_messages: bool,
+    persist_version_updates: bool,
+    current_version: &str,
+    changelog_markdown: &str,
+) -> Option<StartupChangelog> {
+    if has_existing_messages {
+        return None;
+    }
+
+    let remember_version = |config: &mut Config| {
+        if persist_version_updates {
+            if let Err(err) = persist_last_changelog_version_with_roots(
+                global_dir,
+                cwd,
+                config_override,
+                current_version,
+            ) {
+                tracing::warn!("Failed to persist last changelog version: {err}");
+            }
+        }
+        config.last_changelog_version = Some(current_version.to_string());
+    };
+
+    let Some(last_seen_version) = config.last_changelog_version.as_deref() else {
+        remember_version(config);
+        return None;
+    };
+
+    if last_seen_version == current_version {
+        return None;
+    }
+
+    let markdown =
+        collect_startup_changelog_sections(changelog_markdown, current_version, last_seen_version)?;
+    remember_version(config);
+
+    if config.quiet_startup.unwrap_or(false) || config.collapse_changelog.unwrap_or(false) {
+        Some(StartupChangelog::Condensed {
+            latest_version: current_version.to_string(),
+        })
+    } else {
+        Some(StartupChangelog::Full { markdown })
+    }
+}
+
+#[cfg(test)]
+mod startup_changelog_tests {
+    use super::*;
+
+    const SAMPLE_CHANGELOG: &str = r"# Changelog
+
+## [Unreleased] (after v0.1.9)
+
+- preview-only note
+
+## [v0.1.9] -- 2026-03-12 -- Release
+
+- shipped fix
+
+## [v0.1.8] -- 2026-03-01 -- Release
+
+- previous release
+";
+
+    fn tempdir() -> tempfile::TempDir {
+        std::fs::create_dir_all(std::env::temp_dir()).expect("create temp root");
+        tempfile::tempdir().expect("temp dir")
+    }
+
+    #[test]
+    fn collect_startup_changelog_sections_starts_at_current_release() {
+        let markdown =
+            collect_startup_changelog_sections(SAMPLE_CHANGELOG, "0.1.9", "0.1.8").unwrap();
+
+        assert!(markdown.contains("## [v0.1.9]"));
+        assert!(markdown.contains("shipped fix"));
+        assert!(!markdown.contains("Unreleased"));
+        assert!(!markdown.contains("preview-only note"));
+        assert!(!markdown.contains("v0.1.8"));
+    }
+
+    #[test]
+    fn prepare_startup_changelog_with_roots_skips_unreleased_section() {
+        let temp = tempdir();
+        let config_path = temp.path().join("settings.json");
+        let global_dir = temp.path().join("global");
+        let cwd = temp.path().join("cwd");
+        std::fs::create_dir_all(&global_dir).expect("global dir");
+        std::fs::create_dir_all(&cwd).expect("cwd dir");
+
+        let mut config = Config {
+            last_changelog_version: Some("0.1.8".to_string()),
+            ..Config::default()
+        };
+
+        let result = prepare_startup_changelog_with_roots(
+            &mut config,
+            &global_dir,
+            &cwd,
+            Some(&config_path),
+            false,
+            true,
+            "0.1.9",
+            SAMPLE_CHANGELOG,
+        );
+
+        let markdown = match result {
+            Some(StartupChangelog::Full { markdown }) => markdown,
+            other => {
+                assert!(
+                    matches!(other, Some(StartupChangelog::Full { .. })),
+                    "expected full startup changelog, got {other:?}"
+                );
+                return;
+            }
+        };
+        assert!(markdown.contains("## [v0.1.9]"));
+        assert!(!markdown.contains("Unreleased"));
+        assert_eq!(config.last_changelog_version.as_deref(), Some("0.1.9"));
+
+        let persisted: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&config_path).expect("settings file"),
+        )
+        .expect("valid settings json");
+        assert_eq!(persisted["lastChangelogVersion"], "0.1.9");
+    }
+}
+
 /// The main interactive TUI application model.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(bubbletea::Model)]
@@ -2019,6 +2284,8 @@ pub struct PiApp {
     git_branch: Option<String>,
     // Startup banner shown in an empty conversation.
     startup_welcome: String,
+    // Startup changelog notice shown for first launch after an upgrade.
+    startup_changelog: Option<StartupChangelog>,
 
     // RAII guard for tmux wheel scroll override (dropped on exit/panic).
     #[allow(dead_code)]
@@ -2044,7 +2311,7 @@ impl PiApp {
     pub fn new(
         agent: Agent,
         session: Arc<Mutex<Session>>,
-        config: Config,
+        mut config: Config,
         resources: ResourceLoader,
         resource_cli: ResourceCliOptions,
         cwd: PathBuf,
@@ -2055,6 +2322,7 @@ impl PiApp {
         event_tx: mpsc::Sender<PiMsg>,
         runtime_handle: RuntimeHandle,
         save_enabled: bool,
+        persist_startup_settings: bool,
         extensions: Option<ExtensionManager>,
         keybindings_override: Option<KeyBindings>,
         messages: Vec<ConversationMessage>,
@@ -2180,6 +2448,17 @@ impl PiApp {
 
         let git_branch = read_git_branch(&cwd);
         let startup_welcome = build_startup_welcome_message(&config);
+        let config_override = Config::config_path_override_from_env(&cwd);
+        let startup_changelog = prepare_startup_changelog_with_roots(
+            &mut config,
+            &Config::global_dir(),
+            &cwd,
+            config_override.as_deref(),
+            !messages.is_empty(),
+            persist_startup_settings,
+            VERSION,
+            include_str!("../CHANGELOG.md"),
+        );
 
         let mut app = Self {
             input,
@@ -2250,6 +2529,7 @@ impl PiApp {
             render_buffers: RenderBuffers::new(),
             git_branch,
             startup_welcome,
+            startup_changelog,
             tmux_wheel_guard: TmuxWheelGuard::install(),
         };
 

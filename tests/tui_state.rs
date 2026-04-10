@@ -147,6 +147,7 @@ fn build_app_with_session_and_config(
     session: Session,
     config: Config,
 ) -> PiApp {
+    let config = common::hermetic_interactive_config(config);
     let cwd = harness.temp_dir().to_path_buf();
     let tools = ToolRegistry::new(&[], &cwd, Some(&config));
     let provider: Arc<dyn Provider> = Arc::new(DummyProvider);
@@ -183,6 +184,7 @@ fn build_app_with_session_and_config(
         event_tx,
         test_runtime_handle(),
         false,
+        false,
         None,
         Some(KeyBindings::new()),
         messages,
@@ -199,6 +201,7 @@ fn build_app_with_session_and_events_and_extension(
     config: Config,
     extension_source: &str,
 ) -> (PiApp, mpsc::Receiver<PiMsg>) {
+    let config = common::hermetic_interactive_config(config);
     let cwd = harness.temp_dir().to_path_buf();
     let tools = ToolRegistry::new(&[], &cwd, Some(&config));
     let provider: Arc<dyn Provider> = Arc::new(DummyProvider);
@@ -264,6 +267,7 @@ fn build_app_with_session_and_events_and_extension(
         event_tx,
         test_runtime_handle(),
         false,
+        false,
         Some(manager),
         Some(KeyBindings::new()),
         messages,
@@ -282,6 +286,7 @@ fn build_app_with_models(
     available_models: Vec<ModelEntry>,
     keybindings: KeyBindings,
 ) -> PiApp {
+    let config = common::hermetic_interactive_config(config);
     let cwd = harness.temp_dir().to_path_buf();
     let tools = ToolRegistry::new(&[], &cwd, Some(&config));
     let provider: Arc<dyn Provider> = Arc::new(DummyProvider);
@@ -314,6 +319,7 @@ fn build_app_with_models(
         Vec::new(),
         event_tx,
         test_runtime_handle(),
+        false,
         false,
         None,
         Some(keybindings),
@@ -351,6 +357,7 @@ fn build_app_with_session_and_events_and_config(
     session: Session,
     config: Config,
 ) -> (PiApp, mpsc::Receiver<PiMsg>) {
+    let config = common::hermetic_interactive_config(config);
     let cwd = harness.temp_dir().to_path_buf();
     let tools = ToolRegistry::new(&[], &cwd, Some(&config));
     let provider: Arc<dyn Provider> = Arc::new(DummyProvider);
@@ -386,6 +393,7 @@ fn build_app_with_session_and_events_and_config(
         pending_inputs,
         event_tx,
         test_runtime_handle(),
+        false,
         false,
         None,
         Some(KeyBindings::new()),
