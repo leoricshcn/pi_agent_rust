@@ -26,7 +26,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::io::{BufRead, BufReader, IsTerminal, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -3066,13 +3066,17 @@ struct PartialEntry {
 fn load_session_meta_jsonl(path: &Path) -> Result<SessionPickEntry> {
     let file = std::fs::File::open(path)
         .map_err(|e| Error::session(format!("Failed to read session: {e}")))?;
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
+    let mut reader = BufReader::new(file);
 
-    let header_line = lines
-        .next()
-        .ok_or_else(|| Error::session("Empty session file"))?
+    let mut header_line = String::new();
+    let n = (&mut reader)
+        .take(100 * 1024 * 1024)
+        .read_line(&mut header_line)
         .map_err(|e| Error::session(format!("Failed to read header: {e}")))?;
+
+    if n == 0 {
+        return Err(Error::session("Empty session file"));
+    }
 
     let header: SessionHeader =
         serde_json::from_str(&header_line).map_err(|e| Error::session(format!("{e}")))?;
@@ -3082,10 +3086,17 @@ fn load_session_meta_jsonl(path: &Path) -> Result<SessionPickEntry> {
 
     let mut message_count = 0u64;
     let mut name = None;
+    let mut line_content = String::new();
 
-    for line_content in lines {
-        let line_content = line_content
-            .map_err(|e| Error::session(format!("Failed to read session entry: {e}")))?;
+    loop {
+        line_content.clear();
+        let n = match (&mut reader).take(100 * 1024 * 1024).read_line(&mut line_content) {
+            Ok(0) => break,
+            Ok(_) => 1,
+            Err(e) => {
+                return Err(Error::session(format!("Failed to read session entry: {e}")));
+            }
+        };
         if let Ok(entry) = serde_json::from_str::<PartialEntry>(&line_content) {
             match entry.r#type.as_str() {
                 "message" => message_count += 1,
@@ -3925,7 +3936,8 @@ fn open_jsonl_blocking(path_buf: PathBuf) -> Result<(Session, SessionOpenDiagnos
     let mut reader = std::io::BufReader::new(file);
 
     let mut header_line = String::new();
-    reader
+    (&mut reader)
+        .take(100 * 1024 * 1024)
         .read_line(&mut header_line)
         .map_err(|e| crate::Error::Io(Box::new(e)))?;
 
@@ -3956,7 +3968,7 @@ fn open_jsonl_blocking(path_buf: PathBuf) -> Result<(Session, SessionOpenDiagnos
 
         for _ in 0..JSONL_PARSE_BATCH_SIZE {
             let mut line = String::new();
-            match reader.read_line(&mut line) {
+            match (&mut reader).take(100 * 1024 * 1024).read_line(&mut line) {
                 Ok(0) => {
                     batch_eof = true;
                     break;
@@ -4107,7 +4119,8 @@ fn open_from_v2_store_blocking(jsonl_path: PathBuf) -> Result<(Session, SessionO
     let file = std::fs::File::open(&jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
     let mut reader = BufReader::new(file);
     let mut header_line = String::new();
-    reader
+    (&mut reader)
+        .take(100 * 1024 * 1024)
         .read_line(&mut header_line)
         .map_err(|e| crate::Error::Io(Box::new(e)))?;
     let header: SessionHeader = serde_json::from_str(header_line.trim())
@@ -4247,8 +4260,17 @@ fn build_v2_sidecar_from_jsonl_into(jsonl_path: &Path, v2_root: &Path) -> Result
         }
         let mut store = SessionStoreV2::create(v2_root, 64 * 1024 * 1024)?;
 
-        for line_res in reader.lines() {
-            let line = line_res.map_err(|e| crate::Error::Io(Box::new(e)))?;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = match (&mut reader)
+                .take(100 * 1024 * 1024)
+                .read_line(&mut line)
+            {
+                Ok(0) => break,
+                Ok(_) => 1,
+                Err(e) => return Err(crate::Error::Io(Box::new(e))),
+            };
             if line.trim().is_empty() {
                 continue;
             }
@@ -4399,7 +4421,8 @@ pub fn verify_v2_against_jsonl(
     let mut reader = std::io::BufReader::new(file);
 
     let mut header_line = String::new();
-    reader
+    (&mut reader)
+        .take(100 * 1024 * 1024)
         .read_line(&mut header_line)
         .map_err(|e| crate::Error::Io(Box::new(e)))?;
 
@@ -4415,8 +4438,18 @@ pub fn verify_v2_against_jsonl(
 
     let mut jsonl_ids: Vec<String> = Vec::new();
     let mut jsonl_chain_hash = V2_CHAIN_HASH_GENESIS.to_string();
-    for line_res in reader.lines() {
-        let line = line_res.map_err(|e| crate::Error::Io(Box::new(e)))?;
+    
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = match (&mut reader)
+            .take(100 * 1024 * 1024)
+            .read_line(&mut line)
+        {
+            Ok(0) => break,
+            Ok(_) => 1,
+            Err(e) => return Err(crate::Error::Io(Box::new(e))),
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -4633,7 +4666,8 @@ pub fn migrate_dry_run(jsonl_path: &Path) -> Result<session_store_v2::MigrationV
     let mut reader = std::io::BufReader::new(file);
 
     let mut header_line = String::new();
-    if reader
+    if (&mut reader)
+        .take(100 * 1024 * 1024)
         .read_line(&mut header_line)
         .map_err(|e| crate::Error::Io(Box::new(e)))?
         == 0
@@ -4652,7 +4686,8 @@ pub fn migrate_dry_run(jsonl_path: &Path) -> Result<session_store_v2::MigrationV
     let mut line = String::new();
     loop {
         line.clear();
-        let bytes_read = reader
+        let bytes_read = (&mut reader)
+            .take(100 * 1024 * 1024)
             .read_line(&mut line)
             .map_err(|e| crate::Error::Io(Box::new(e)))?;
         if bytes_read == 0 {
@@ -4709,7 +4744,8 @@ fn jsonl_has_entry_lines(jsonl_path: &Path) -> Result<bool> {
     let mut reader = std::io::BufReader::new(file);
 
     let mut line = String::new();
-    if reader
+    if (&mut reader)
+        .take(100 * 1024 * 1024)
         .read_line(&mut line)
         .map_err(|e| crate::Error::Io(Box::new(e)))?
         == 0
@@ -4719,7 +4755,8 @@ fn jsonl_has_entry_lines(jsonl_path: &Path) -> Result<bool> {
 
     loop {
         line.clear();
-        let bytes_read = reader
+        let bytes_read = (&mut reader)
+            .take(100 * 1024 * 1024)
             .read_line(&mut line)
             .map_err(|e| crate::Error::Io(Box::new(e)))?;
         if bytes_read == 0 {

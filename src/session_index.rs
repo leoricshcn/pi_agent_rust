@@ -9,7 +9,7 @@ use sqlmodel_core::Value;
 use sqlmodel_sqlite::{OpenFlags, SqliteConfig, SqliteConnection};
 use std::borrow::Borrow;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -489,13 +489,17 @@ struct PartialEntry {
 fn build_meta_from_jsonl(path: &Path) -> Result<SessionMeta> {
     let file = File::open(path)
         .map_err(|err| Error::session(format!("Read session file {}: {err}", path.display())))?;
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
+    let mut reader = BufReader::new(file);
+    let mut header_line = String::new();
 
-    let header_line = lines
-        .next()
-        .ok_or_else(|| Error::session(format!("Empty session file {}", path.display())))?
+    let n = (&mut reader)
+        .take(100 * 1024 * 1024)
+        .read_line(&mut header_line)
         .map_err(|err| Error::session(format!("Read session header {}: {err}", path.display())))?;
+
+    if n == 0 {
+        return Err(Error::session(format!("Empty session file {}", path.display())));
+    }
 
     let header: SessionHeader = serde_json::from_str(&header_line)
         .map_err(|err| Error::session(format!("Parse session header {}: {err}", path.display())))?;
@@ -508,12 +512,19 @@ fn build_meta_from_jsonl(path: &Path) -> Result<SessionMeta> {
 
     let mut message_count = 0u64;
     let mut name = None;
+    let mut line_buf = String::new();
 
-    for line in lines {
-        let line = line.map_err(|err| {
-            Error::session(format!("Read session entry line {}: {err}", path.display()))
-        })?;
-        if let Ok(entry) = serde_json::from_str::<PartialEntry>(&line) {
+    loop {
+        line_buf.clear();
+        let n = match (&mut reader).take(100 * 1024 * 1024).read_line(&mut line_buf) {
+            Ok(0) => break,
+            Ok(_) => 1,
+            Err(err) => {
+                return Err(Error::session(format!("Read session entry line {}: {err}", path.display())));
+            }
+        };
+
+        if let Ok(entry) = serde_json::from_str::<PartialEntry>(&line_buf) {
             match entry.r#type.as_str() {
                 "message" => message_count += 1,
                 "session_info" if entry.name.is_some() => {
