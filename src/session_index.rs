@@ -13,6 +13,8 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const MAX_JSONL_LINE_BYTES: usize = 100 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct SessionMeta {
     pub path: String,
@@ -469,6 +471,46 @@ fn build_meta(
     })
 }
 
+fn read_capped_utf8_line_with_limit<R: BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<String>> {
+    let limit = u64::try_from(max_bytes)
+        .unwrap_or(u64::MAX.saturating_sub(2))
+        .saturating_add(2);
+    let mut bytes = Vec::new();
+    let bytes_read = reader.take(limit).read_until(b'\n', &mut bytes)?;
+    if bytes_read == 0 {
+        return Ok(None);
+    }
+
+    let content_len = bytes.strip_suffix(b"\n").map_or(bytes.len(), <[u8]>::len);
+    if content_len > max_bytes {
+        if !bytes.ends_with(b"\n") {
+            let mut discard = Vec::new();
+            loop {
+                discard.clear();
+                let discarded = reader.read_until(b'\n', &mut discard)?;
+                if discarded == 0 || discard.ends_with(b"\n") {
+                    break;
+                }
+            }
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("JSONL line exceeds {max_bytes} bytes"),
+        ));
+    }
+
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+}
+
+fn read_capped_utf8_line<R: BufRead>(reader: &mut R) -> std::io::Result<Option<String>> {
+    read_capped_utf8_line_with_limit(reader, MAX_JSONL_LINE_BYTES)
+}
+
 pub(crate) fn build_meta_from_file(path: &Path) -> Result<SessionMeta> {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("jsonl") => build_meta_from_jsonl(path),
@@ -490,16 +532,14 @@ fn build_meta_from_jsonl(path: &Path) -> Result<SessionMeta> {
     let file = File::open(path)
         .map_err(|err| Error::session(format!("Read session file {}: {err}", path.display())))?;
     let mut reader = BufReader::new(file);
-    let mut header_line = String::new();
-
-    let n = (&mut reader)
-        .take(100 * 1024 * 1024)
-        .read_line(&mut header_line)
-        .map_err(|err| Error::session(format!("Read session header {}: {err}", path.display())))?;
-
-    if n == 0 {
-        return Err(Error::session(format!("Empty session file {}", path.display())));
-    }
+    let Some(header_line) = read_capped_utf8_line(&mut reader)
+        .map_err(|err| Error::session(format!("Read session header {}: {err}", path.display())))?
+    else {
+        return Err(Error::session(format!(
+            "Empty session file {}",
+            path.display()
+        )));
+    };
 
     let header: SessionHeader = serde_json::from_str(&header_line)
         .map_err(|err| Error::session(format!("Parse session header {}: {err}", path.display())))?;
@@ -512,16 +552,12 @@ fn build_meta_from_jsonl(path: &Path) -> Result<SessionMeta> {
 
     let mut message_count = 0u64;
     let mut name = None;
-    let mut line_buf = String::new();
-
     loop {
-        line_buf.clear();
-        let n = match (&mut reader).take(100 * 1024 * 1024).read_line(&mut line_buf) {
-            Ok(0) => break,
-            Ok(_) => 1,
-            Err(err) => {
-                return Err(Error::session(format!("Read session entry line {}: {err}", path.display())));
-            }
+        let Some(line_buf) = read_capped_utf8_line(&mut reader).map_err(|err| {
+            Error::session(format!("Read session entry line {}: {err}", path.display()))
+        })?
+        else {
+            break;
         };
 
         if let Ok(entry) = serde_json::from_str::<PartialEntry>(&line_buf) {
@@ -1927,6 +1963,44 @@ mod tests {
             matches!(err, Error::Session(ref msg) if msg.contains("Read session entry line")),
             "Expected entry line read error, got {err:?}"
         );
+    }
+
+    #[test]
+    fn read_capped_utf8_line_with_limit_rejects_oversized_line_without_newline() {
+        let oversized = "x".repeat(5);
+        let mut reader = std::io::Cursor::new(oversized.into_bytes());
+
+        let err = read_capped_utf8_line_with_limit(&mut reader, 4).expect_err("oversized line");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("JSONL line exceeds 4 bytes"));
+    }
+
+    #[test]
+    fn read_capped_utf8_line_with_limit_allows_exact_limit_before_newline() {
+        let mut reader = std::io::Cursor::new(b"abcd\n".to_vec());
+
+        let line = read_capped_utf8_line_with_limit(&mut reader, 4)
+            .expect("read line")
+            .expect("line present");
+        assert_eq!(line, "abcd\n");
+        assert!(
+            read_capped_utf8_line_with_limit(&mut reader, 4)
+                .expect("read eof")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn read_capped_utf8_line_with_limit_drains_oversized_line_remainder() {
+        let mut reader = std::io::Cursor::new(b"xxxxx\ny\n".to_vec());
+
+        let err = read_capped_utf8_line_with_limit(&mut reader, 4).expect_err("oversized line");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+        let next_line = read_capped_utf8_line_with_limit(&mut reader, 4)
+            .expect("read next line")
+            .expect("next line present");
+        assert_eq!(next_line, "y\n");
     }
 
     #[test]

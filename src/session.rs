@@ -37,6 +37,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Current session file format version.
 pub const SESSION_VERSION: u8 = 3;
+const MAX_JSONL_LINE_BYTES: usize = 100 * 1024 * 1024;
 const V2_CHAIN_HASH_GENESIS: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -49,6 +50,46 @@ fn finish_worker_result<T, E>(
         std::panic::resume_unwind(panic_payload);
     }
     recv_result.map_err(|_| crate::Error::session(cancelled_message))?
+}
+
+fn read_capped_utf8_line_with_limit<R: BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<String>> {
+    let limit = u64::try_from(max_bytes)
+        .unwrap_or(u64::MAX.saturating_sub(2))
+        .saturating_add(2);
+    let mut bytes = Vec::new();
+    let bytes_read = reader.take(limit).read_until(b'\n', &mut bytes)?;
+    if bytes_read == 0 {
+        return Ok(None);
+    }
+
+    let content_len = bytes.strip_suffix(b"\n").map_or(bytes.len(), <[u8]>::len);
+    if content_len > max_bytes {
+        if !bytes.ends_with(b"\n") {
+            let mut discard = Vec::new();
+            loop {
+                discard.clear();
+                let discarded = reader.read_until(b'\n', &mut discard)?;
+                if discarded == 0 || discard.ends_with(b"\n") {
+                    break;
+                }
+            }
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("JSONL line exceeds {max_bytes} bytes"),
+        ));
+    }
+
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+}
+
+fn read_capped_utf8_line<R: BufRead>(reader: &mut R) -> std::io::Result<Option<String>> {
+    read_capped_utf8_line_with_limit(reader, MAX_JSONL_LINE_BYTES)
 }
 
 #[cfg(unix)]
@@ -87,7 +128,10 @@ fn save_jsonl_full_rewrite_blocking(
         }
         writer.flush()?;
     }
-    temp_file.as_file_mut().sync_all().map_err(|e| crate::Error::Io(Box::new(e)))?;
+    temp_file
+        .as_file_mut()
+        .sync_all()
+        .map_err(|e| crate::Error::Io(Box::new(e)))?;
     temp_file
         .persist(path)
         .map_err(|e| crate::Error::Io(Box::new(e.error)))?;
@@ -1091,16 +1135,7 @@ impl Session {
             &scanned.refreshed_entries,
             "Failed to refresh session metadata in index during picker refresh",
         );
-        for entry in scanned.entries {
-            by_path
-                .entry(entry.path.clone())
-                .and_modify(|existing| {
-                    if entry.last_modified_ms > existing.last_modified_ms {
-                        *existing = entry.clone();
-                    }
-                })
-                .or_insert(entry);
-        }
+        merge_scanned_session_entries(&mut by_path, scanned.entries);
         let mut entries = by_path.into_values().collect::<Vec<_>>();
 
         if entries.is_empty() {
@@ -1551,16 +1586,7 @@ impl Session {
             &scanned.refreshed_entries,
             "Failed to refresh session metadata in index during recent-session refresh",
         );
-        for entry in scanned.entries {
-            by_path
-                .entry(entry.path.clone())
-                .and_modify(|existing| {
-                    if entry.last_modified_ms > existing.last_modified_ms {
-                        *existing = entry.clone();
-                    }
-                })
-                .or_insert(entry);
-        }
+        merge_scanned_session_entries(&mut by_path, scanned.entries);
 
         let mut candidates = by_path.into_values().collect::<Vec<_>>();
         candidates.sort_by_key(|entry| std::cmp::Reverse(entry.last_modified_ms));
@@ -2982,6 +3008,18 @@ fn refresh_session_index_entries(
     }
 }
 
+fn merge_scanned_session_entries(
+    by_path: &mut HashMap<PathBuf, SessionPickEntry>,
+    entries: Vec<SessionPickEntry>,
+) {
+    for entry in entries {
+        // Disk is the source of truth for session metadata. The scan either
+        // reparsed the file or confirmed the cached snapshot still matches, so
+        // it should always win over the earlier index view for that path.
+        by_path.insert(entry.path.clone(), entry);
+    }
+}
+
 async fn scan_sessions_on_disk(
     project_session_dir: &Path,
     known: Vec<SessionPickEntry>,
@@ -3068,15 +3106,11 @@ fn load_session_meta_jsonl(path: &Path) -> Result<SessionPickEntry> {
         .map_err(|e| Error::session(format!("Failed to read session: {e}")))?;
     let mut reader = BufReader::new(file);
 
-    let mut header_line = String::new();
-    let n = (&mut reader)
-        .take(100 * 1024 * 1024)
-        .read_line(&mut header_line)
-        .map_err(|e| Error::session(format!("Failed to read header: {e}")))?;
-
-    if n == 0 {
+    let Some(header_line) = read_capped_utf8_line(&mut reader)
+        .map_err(|e| Error::session(format!("Failed to read header: {e}")))?
+    else {
         return Err(Error::session("Empty session file"));
-    }
+    };
 
     let header: SessionHeader =
         serde_json::from_str(&header_line).map_err(|e| Error::session(format!("{e}")))?;
@@ -3086,16 +3120,11 @@ fn load_session_meta_jsonl(path: &Path) -> Result<SessionPickEntry> {
 
     let mut message_count = 0u64;
     let mut name = None;
-    let mut line_content = String::new();
-
     loop {
-        line_content.clear();
-        let n = match (&mut reader).take(100 * 1024 * 1024).read_line(&mut line_content) {
-            Ok(0) => break,
-            Ok(_) => 1,
-            Err(e) => {
-                return Err(Error::session(format!("Failed to read session entry: {e}")));
-            }
+        let Some(line_content) = read_capped_utf8_line(&mut reader)
+            .map_err(|e| Error::session(format!("Failed to read session entry: {e}")))?
+        else {
+            break;
         };
         if let Ok(entry) = serde_json::from_str::<PartialEntry>(&line_content) {
             match entry.r#type.as_str() {
@@ -3930,17 +3959,14 @@ const JSONL_PARSE_BATCH_SIZE: usize = 8192;
 /// finalization) for the fastest possible open path.
 #[allow(clippy::too_many_lines)]
 fn open_jsonl_blocking(path_buf: PathBuf) -> Result<(Session, SessionOpenDiagnostics)> {
-    use std::io::BufRead;
-
     let file = std::fs::File::open(&path_buf).map_err(|e| crate::Error::Io(Box::new(e)))?;
     let mut reader = std::io::BufReader::new(file);
 
-    let mut header_line = String::new();
-    (&mut reader)
-        .take(100 * 1024 * 1024)
-        .read_line(&mut header_line)
-        .map_err(|e| crate::Error::Io(Box::new(e)))?;
-
+    let Some(header_line) =
+        read_capped_utf8_line(&mut reader).map_err(|e| crate::Error::Io(Box::new(e)))?
+    else {
+        return Err(crate::Error::session("Empty session file"));
+    };
     if header_line.trim().is_empty() {
         return Err(crate::Error::session("Empty session file"));
     }
@@ -3967,13 +3993,12 @@ fn open_jsonl_blocking(path_buf: PathBuf) -> Result<(Session, SessionOpenDiagnos
         let mut batch_eof = false;
 
         for _ in 0..JSONL_PARSE_BATCH_SIZE {
-            let mut line = String::new();
-            match (&mut reader).take(100 * 1024 * 1024).read_line(&mut line) {
-                Ok(0) => {
+            match read_capped_utf8_line(&mut reader) {
+                Ok(None) => {
                     batch_eof = true;
                     break;
                 }
-                Ok(_) => {
+                Ok(Some(line)) => {
                     if !line.trim().is_empty() {
                         line_batch.push((current_line_num, line));
                     }
@@ -4118,11 +4143,11 @@ fn open_from_v2_store_blocking(jsonl_path: PathBuf) -> Result<(Session, SessionO
     // 1. Read JSONL header (first line only).
     let file = std::fs::File::open(&jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
     let mut reader = BufReader::new(file);
-    let mut header_line = String::new();
-    (&mut reader)
-        .take(100 * 1024 * 1024)
-        .read_line(&mut header_line)
-        .map_err(|e| crate::Error::Io(Box::new(e)))?;
+    let Some(header_line) =
+        read_capped_utf8_line(&mut reader).map_err(|e| crate::Error::Io(Box::new(e)))?
+    else {
+        return Err(crate::Error::session("Empty JSONL session file"));
+    };
     let header: SessionHeader = serde_json::from_str(header_line.trim())
         .map_err(|e| crate::Error::session(format!("Invalid header in JSONL: {e}")))?;
     header.validate().map_err(|reason| {
@@ -4260,16 +4285,11 @@ fn build_v2_sidecar_from_jsonl_into(jsonl_path: &Path, v2_root: &Path) -> Result
         }
         let mut store = SessionStoreV2::create(v2_root, 64 * 1024 * 1024)?;
 
-        let mut line = String::new();
         loop {
-            line.clear();
-            let n = match (&mut reader)
-                .take(100 * 1024 * 1024)
-                .read_line(&mut line)
-            {
-                Ok(0) => break,
-                Ok(_) => 1,
-                Err(e) => return Err(crate::Error::Io(Box::new(e))),
+            let Some(line) =
+                read_capped_utf8_line(&mut reader).map_err(|e| crate::Error::Io(Box::new(e)))?
+            else {
+                break;
             };
             if line.trim().is_empty() {
                 continue;
@@ -4414,18 +4434,15 @@ pub fn verify_v2_against_jsonl(
     jsonl_path: &Path,
     store: &SessionStoreV2,
 ) -> Result<session_store_v2::MigrationVerification> {
-    use std::io::BufRead;
-
     // Parse all JSONL entries (skip header).
     let file = std::fs::File::open(jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
     let mut reader = std::io::BufReader::new(file);
 
-    let mut header_line = String::new();
-    (&mut reader)
-        .take(100 * 1024 * 1024)
-        .read_line(&mut header_line)
-        .map_err(|e| crate::Error::Io(Box::new(e)))?;
-
+    let Some(header_line) =
+        read_capped_utf8_line(&mut reader).map_err(|e| crate::Error::Io(Box::new(e)))?
+    else {
+        return Err(crate::Error::session("Empty JSONL session file"));
+    };
     if header_line.trim().is_empty() {
         return Err(crate::Error::session("Empty JSONL session file"));
     }
@@ -4438,17 +4455,12 @@ pub fn verify_v2_against_jsonl(
 
     let mut jsonl_ids: Vec<String> = Vec::new();
     let mut jsonl_chain_hash = V2_CHAIN_HASH_GENESIS.to_string();
-    
-    let mut line = String::new();
+
     loop {
-        line.clear();
-        let n = match (&mut reader)
-            .take(100 * 1024 * 1024)
-            .read_line(&mut line)
-        {
-            Ok(0) => break,
-            Ok(_) => 1,
-            Err(e) => return Err(crate::Error::Io(Box::new(e))),
+        let Some(line) =
+            read_capped_utf8_line(&mut reader).map_err(|e| crate::Error::Io(Box::new(e)))?
+        else {
+            break;
         };
         if line.trim().is_empty() {
             continue;
@@ -4655,8 +4667,6 @@ fn migration_status_can_rebuild_index(error: &Error) -> bool {
 /// cleans up. Returns the verification result so callers can inspect
 /// entry counts and integrity before committing.
 pub fn migrate_dry_run(jsonl_path: &Path) -> Result<session_store_v2::MigrationVerification> {
-    use std::io::BufRead;
-
     let tmp_dir =
         tempfile::tempdir().map_err(|e| crate::Error::session(format!("tempdir: {e}")))?;
     let tmp_v2_root = tmp_dir.path().join("dry_run.v2");
@@ -4665,15 +4675,11 @@ pub fn migrate_dry_run(jsonl_path: &Path) -> Result<session_store_v2::MigrationV
     let file = std::fs::File::open(jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
     let mut reader = std::io::BufReader::new(file);
 
-    let mut header_line = String::new();
-    if (&mut reader)
-        .take(100 * 1024 * 1024)
-        .read_line(&mut header_line)
-        .map_err(|e| crate::Error::Io(Box::new(e)))?
-        == 0
-    {
+    let Some(header_line) =
+        read_capped_utf8_line(&mut reader).map_err(|e| crate::Error::Io(Box::new(e)))?
+    else {
         return Err(crate::Error::session("Empty JSONL session file"));
-    }
+    };
 
     let header: SessionHeader = serde_json::from_str(header_line.trim_end())
         .map_err(|e| crate::Error::session(format!("Invalid header in JSONL: {e}")))?;
@@ -4683,16 +4689,12 @@ pub fn migrate_dry_run(jsonl_path: &Path) -> Result<session_store_v2::MigrationV
 
     let mut store = SessionStoreV2::create(&tmp_v2_root, 64 * 1024 * 1024)?;
 
-    let mut line = String::new();
     loop {
-        line.clear();
-        let bytes_read = (&mut reader)
-            .take(100 * 1024 * 1024)
-            .read_line(&mut line)
-            .map_err(|e| crate::Error::Io(Box::new(e)))?;
-        if bytes_read == 0 {
+        let Some(line) =
+            read_capped_utf8_line(&mut reader).map_err(|e| crate::Error::Io(Box::new(e)))?
+        else {
             break;
-        }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -4738,30 +4740,21 @@ pub fn recover_partial_migration(
 }
 
 fn jsonl_has_entry_lines(jsonl_path: &Path) -> Result<bool> {
-    use std::io::BufRead;
-
     let file = std::fs::File::open(jsonl_path).map_err(|e| crate::Error::Io(Box::new(e)))?;
     let mut reader = std::io::BufReader::new(file);
 
-    let mut line = String::new();
-    if (&mut reader)
-        .take(100 * 1024 * 1024)
-        .read_line(&mut line)
-        .map_err(|e| crate::Error::Io(Box::new(e)))?
-        == 0
-    {
+    let Some(_line) =
+        read_capped_utf8_line(&mut reader).map_err(|e| crate::Error::Io(Box::new(e)))?
+    else {
         return Err(crate::Error::session("Empty JSONL session file"));
-    }
+    };
 
     loop {
-        line.clear();
-        let bytes_read = (&mut reader)
-            .take(100 * 1024 * 1024)
-            .read_line(&mut line)
-            .map_err(|e| crate::Error::Io(Box::new(e)))?;
-        if bytes_read == 0 {
+        let Some(line) =
+            read_capped_utf8_line(&mut reader).map_err(|e| crate::Error::Io(Box::new(e)))?
+        else {
             return Ok(false);
-        }
+        };
         if !line.trim().is_empty() {
             return Ok(true);
         }
@@ -7255,6 +7248,44 @@ mod tests {
     }
 
     #[test]
+    fn read_capped_utf8_line_with_limit_rejects_oversized_line_without_newline() {
+        let oversized = "x".repeat(5);
+        let mut reader = std::io::Cursor::new(oversized.into_bytes());
+
+        let err = read_capped_utf8_line_with_limit(&mut reader, 4).expect_err("oversized line");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("JSONL line exceeds 4 bytes"));
+    }
+
+    #[test]
+    fn read_capped_utf8_line_with_limit_allows_exact_limit_before_newline() {
+        let mut reader = std::io::Cursor::new(b"abcd\n".to_vec());
+
+        let line = read_capped_utf8_line_with_limit(&mut reader, 4)
+            .expect("read line")
+            .expect("line present");
+        assert_eq!(line, "abcd\n");
+        assert!(
+            read_capped_utf8_line_with_limit(&mut reader, 4)
+                .expect("read eof")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn read_capped_utf8_line_with_limit_drains_oversized_line_remainder() {
+        let mut reader = std::io::Cursor::new(b"xxxxx\ny\n".to_vec());
+
+        let err = read_capped_utf8_line_with_limit(&mut reader, 4).expect_err("oversized line");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+        let next_line = read_capped_utf8_line_with_limit(&mut reader, 4)
+            .expect("read next line")
+            .expect("next line present");
+        assert_eq!(next_line, "y\n");
+    }
+
+    #[test]
     fn test_scan_sessions_on_disk_ignores_stale_known_entry_when_size_mismatch() {
         let temp = tempfile::tempdir().unwrap();
         let mut session = Session::create_with_dir(Some(temp.path().to_path_buf()));
@@ -7294,6 +7325,81 @@ mod tests {
         assert_eq!(scanned.entries[0].path, path);
         assert_eq!(scanned.entries[0].message_count, 2);
         assert_eq!(scanned.entries[0].size_bytes, disk_size);
+    }
+
+    #[test]
+    fn test_merge_scanned_session_entries_replaces_cached_entry_when_size_changes() {
+        let path = PathBuf::from("session.jsonl");
+        let mut by_path = HashMap::from([(
+            path.clone(),
+            SessionPickEntry {
+                path: path.clone(),
+                id: "session-id".to_string(),
+                cwd: "/work".to_string(),
+                timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+                message_count: 1,
+                name: Some("cached".to_string()),
+                last_modified_ms: 1234,
+                size_bytes: 4096,
+            },
+        )]);
+
+        merge_scanned_session_entries(
+            &mut by_path,
+            vec![SessionPickEntry {
+                path: path.clone(),
+                id: "session-id".to_string(),
+                cwd: "/work".to_string(),
+                timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+                message_count: 2,
+                name: Some("disk".to_string()),
+                last_modified_ms: 1234,
+                size_bytes: 8192,
+            }],
+        );
+
+        let merged = by_path.get(&path).expect("merged entry");
+        assert_eq!(merged.message_count, 2);
+        assert_eq!(merged.name.as_deref(), Some("disk"));
+        assert_eq!(merged.size_bytes, 8192);
+    }
+
+    #[test]
+    fn test_merge_scanned_session_entries_replaces_cached_entry_even_if_disk_mtime_regresses() {
+        let path = PathBuf::from("session.jsonl");
+        let mut by_path = HashMap::from([(
+            path.clone(),
+            SessionPickEntry {
+                path: path.clone(),
+                id: "session-id".to_string(),
+                cwd: "/work".to_string(),
+                timestamp: "2026-01-02T00:00:00.000Z".to_string(),
+                message_count: 9,
+                name: Some("cached".to_string()),
+                last_modified_ms: 2000,
+                size_bytes: 4096,
+            },
+        )]);
+
+        merge_scanned_session_entries(
+            &mut by_path,
+            vec![SessionPickEntry {
+                path: path.clone(),
+                id: "session-id".to_string(),
+                cwd: "/work".to_string(),
+                timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+                message_count: 3,
+                name: Some("disk".to_string()),
+                last_modified_ms: 1000,
+                size_bytes: 2048,
+            }],
+        );
+
+        let merged = by_path.get(&path).expect("merged entry");
+        assert_eq!(merged.message_count, 3);
+        assert_eq!(merged.name.as_deref(), Some("disk"));
+        assert_eq!(merged.last_modified_ms, 1000);
+        assert_eq!(merged.size_bytes, 2048);
     }
 
     #[test]
