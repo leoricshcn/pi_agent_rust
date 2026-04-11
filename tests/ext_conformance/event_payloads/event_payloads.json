@@ -482,9 +482,18 @@
         "payload": {
           "type": "session_before_compact",
           "preparation": {
-            "messageCount": 50,
-            "tokenEstimate": 45000,
-            "threshold": 100000
+            "firstKeptEntryId": "entry-010",
+            "messagesToSummarize": [],
+            "turnPrefixMessages": [],
+            "isSplitTurn": false,
+            "tokensBefore": 45000,
+            "fileOps": { "read": [], "written": [], "edited": [] },
+            "settings": {
+              "enabled": true,
+              "contextWindowTokens": 128000,
+              "reserveTokens": 10240,
+              "keepRecentTokens": 12800
+            }
           },
           "branchEntries": [],
           "customInstructions": null
@@ -497,9 +506,18 @@
         "payload": {
           "type": "session_before_compact",
           "preparation": {
-            "messageCount": 10,
-            "tokenEstimate": 5000,
-            "threshold": 100000
+            "firstKeptEntryId": "entry-005",
+            "messagesToSummarize": [],
+            "turnPrefixMessages": [],
+            "isSplitTurn": false,
+            "tokensBefore": 5000,
+            "fileOps": { "read": [], "written": [], "edited": [] },
+            "settings": {
+              "enabled": true,
+              "contextWindowTokens": 128000,
+              "reserveTokens": 10240,
+              "keepRecentTokens": 12800
+            }
           },
           "branchEntries": [],
           "customInstructions": null

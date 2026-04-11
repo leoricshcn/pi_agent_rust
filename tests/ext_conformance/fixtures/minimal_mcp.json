@@ -18,6 +18,12 @@
       "id": "scn-minimal-mcp-neg-001",
       "kind": "mcp",
       "summary": "Negative: MCP server registration fails with invalid config",
+      "input": {
+        "server": {
+          "name": "broken-mcp",
+          "args": ["hello"]
+        }
+      },
       "expect": {
         "is_error": true
       }

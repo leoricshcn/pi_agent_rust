@@ -50,6 +50,52 @@
       }
     },
     {
+      "name": "edit_multiline_crlf",
+      "description": "CRLF input matches LF oldText and preserves diff output",
+      "setup": [
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "line1\r\nline2\r\nline3"
+        }
+      ],
+      "input": {
+        "path": "test.txt",
+        "oldText": "line2",
+        "newText": "replaced"
+      },
+      "expected": {
+        "content_exact": "Successfully replaced text in test.txt.",
+        "details_exact": {
+          "diff": " 1 line1\n-2 line2\n+2 replaced\n 3 line3",
+          "firstChangedLine": 2
+        }
+      }
+    },
+    {
+      "name": "edit_multiline_cr_only",
+      "description": "CR-only input matches LF oldText and preserves diff output",
+      "setup": [
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "line1\rline2\rline3"
+        }
+      ],
+      "input": {
+        "path": "test.txt",
+        "oldText": "line2",
+        "newText": "replaced"
+      },
+      "expected": {
+        "content_exact": "Successfully replaced text in test.txt.",
+        "details_exact": {
+          "diff": " 1 line1\n-2 line2\n+2 replaced\n 3 line3",
+          "firstChangedLine": 2
+        }
+      }
+    },
+    {
       "name": "edit_text_not_found",
       "description": "Editing non-existent text should error",
       "setup": [
@@ -78,6 +124,18 @@
       },
       "expect_error": true,
       "error_contains": "File not found",
+      "expected": {}
+    },
+    {
+      "name": "edit_outside_cwd",
+      "description": "Editing outside the working directory should be rejected",
+      "input": {
+        "path": "../outside.txt",
+        "oldText": "old",
+        "newText": "new"
+      },
+      "expect_error": true,
+      "error_contains": "Cannot edit outside the working directory",
       "expected": {}
     },
     {
@@ -429,9 +487,38 @@
         "oldText": "Hello World\nSecond line",
         "newText": "Hello Rust\nModified line"
       },
-      "expected": {},
-      "expect_error": true,
-      "error_contains": "Could not find the exact text"
+      "expected": {
+        "content_exact": "Successfully replaced text in test.txt.",
+        "details_contains": [
+          "-1 Hello World",
+          "+1 Hello Rust",
+          "-2 Second line",
+          "+2 Modified line"
+        ]
+      }
+    },
+    {
+      "name": "edit_exact_trailing_whitespace_unique_exact",
+      "description": "Exact match with trailing whitespace should not be rejected by normalized duplicate detection",
+      "setup": [
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Hello World\\u0020\\u0020\nHello World\n"
+        }
+      ],
+      "input": {
+        "path": "test.txt",
+        "oldText": "Hello World\\u0020\\u0020",
+        "newText": "Hello Rust"
+      },
+      "expected": {
+        "content_exact": "Successfully replaced text in test.txt.",
+        "details_contains": [
+          "-1 Hello World",
+          "+1 Hello Rust"
+        ]
+      }
     },
     {
       "name": "edit_fuzzy_smart_quotes",
@@ -498,6 +585,25 @@
           "diff"
         ]
       }
+    },
+    {
+      "name": "edit_fuzzy_ambiguous_normalized",
+      "description": "Fuzzy match: normalized duplicates must error",
+      "setup": [
+        {
+          "type": "create_file",
+          "path": "test.txt",
+          "content": "Quote \u2018hi\u2019\nQuote \u2019hi\u2018"
+        }
+      ],
+      "input": {
+        "path": "test.txt",
+        "oldText": "Quote 'hi'",
+        "newText": "Quote hey"
+      },
+      "expect_error": true,
+      "error_contains": "Found 2 occurrences",
+      "expected": {}
     }
   ]
 }

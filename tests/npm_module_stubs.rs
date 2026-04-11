@@ -316,7 +316,15 @@ fn aliou_sh_parse() {
         r#"import { parse } from "@aliou/sh";"#,
         r#"(() => {
             const result = parse('echo hello');
-            return Array.isArray(result) && result.length > 0;
+            return !!(
+                result &&
+                result.ast &&
+                Array.isArray(result.ast.body) &&
+                result.ast.body.length === 1 &&
+                result.ast.body[0] &&
+                result.ast.body[0].command &&
+                result.ast.body[0].command.type === 'SimpleCommand'
+            );
         })()"#,
     );
     assert_eq!(result, "true");
@@ -530,4 +538,159 @@ fn node_util_strip_vt_control_chars() {
         r#"typeof stripVTControlCharacters"#,
     );
     assert_eq!(result, "function");
+}
+
+// ─── openai ────────────────────────────────────────────────────────────────
+
+#[test]
+fn openai_imports() {
+    let result = eval_ext(
+        r#"import OpenAI, { OpenAI as NamedOpenAI } from "openai";"#,
+        r#"(() => {
+            const client = new OpenAI({ apiKey: "test" });
+            return typeof client.chat.completions.create === 'function'
+                && typeof NamedOpenAI === 'function';
+        })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+// ─── adm-zip ───────────────────────────────────────────────────────────────
+
+#[test]
+fn adm_zip_import() {
+    let result = eval_ext(
+        r#"import AdmZip from "adm-zip";"#,
+        r#"(() => {
+            const zip = new AdmZip();
+            return Array.isArray(zip.getEntries())
+                && typeof zip.readAsText === 'function'
+                && typeof zip.extractAllTo === 'function';
+        })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+// ─── linkedom ──────────────────────────────────────────────────────────────
+
+#[test]
+fn linkedom_parse_html() {
+    let result = eval_ext(
+        r#"import { parseHTML } from "linkedom";"#,
+        r#"(() => {
+            const { document } = parseHTML('<div>ok</div>');
+            return document.documentElement.outerHTML === '<div>ok</div>'
+                && typeof document.querySelector === 'function'
+                && Array.isArray(document.querySelectorAll('div'));
+        })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+// ─── @sourcegraph/scip-typescript ──────────────────────────────────────────
+
+#[test]
+fn scip_typescript_import() {
+    let result = eval_ext(
+        r#"import { scip } from "@sourcegraph/scip-typescript";"#,
+        r#"(() => {
+            const idx = new scip.Index();
+            return typeof scip.Index === 'function' && typeof idx === 'object';
+        })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn scip_typescript_subpath_import() {
+    let result = eval_ext(
+        r#"import { scip } from "@sourcegraph/scip-typescript/dist/src/scip.js";"#,
+        r#"(() => {
+            const idx = new scip.Index();
+            return typeof scip.Index === 'function' && typeof idx === 'object';
+        })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn scip_typescript_main_import() {
+    let result = eval_ext(
+        r#"import main from "@sourcegraph/scip-typescript/dist/src/main.js";"#,
+        r#"typeof main"#,
+    );
+    assert_eq!(result, "function");
+}
+
+// ─── ws ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn ws_imports() {
+    let result = eval_ext(
+        r#"import WebSocket, { WebSocketServer } from "ws";"#,
+        r#"(() => {
+            const ws = new WebSocket("ws://example");
+            const server = new WebSocketServer();
+            return typeof ws.send === 'function'
+                && ws.readyState === WebSocket.CONNECTING
+                && typeof server.on === 'function'
+                && typeof WebSocket.Server === 'function';
+        })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+// ─── axios ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn axios_imports() {
+    let result = eval_ext(
+        r#"import axios from "axios";"#,
+        r#"(() => {
+            const req = axios.get("https://example.com");
+            return typeof axios.create === 'function' && typeof req.then === 'function';
+        })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+// ─── open ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn open_imports() {
+    let result = eval_ext(
+        r#"import open from "open";"#,
+        r#"(() => {
+            const p = open("https://example.com");
+            return typeof p.then === 'function';
+        })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+// ─── commander ─────────────────────────────────────────────────────────────
+
+#[test]
+fn commander_imports() {
+    let result = eval_ext(
+        r#"import { Command, program } from "commander";"#,
+        r#"(() => {
+            const cmd = new Command("test").option("-f, --flag").action(() => {});
+            return typeof cmd.parse === 'function' && typeof program.parse === 'function';
+        })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+// ─── chalk ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn chalk_imports() {
+    let result = eval_ext(
+        r#"import chalk from "chalk";"#,
+        r#"(() => {
+            return chalk.red.bold("hi") === "hi" && typeof chalk.hex("fff") === 'function';
+        })()"#,
+    );
+    assert_eq!(result, "true");
 }

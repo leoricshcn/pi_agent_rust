@@ -1,0 +1,4 @@
+test.txt:1: match1
+test.txt:2: match2
+
+[2 matches limit reached. Use limit=4 for more, or refine pattern]

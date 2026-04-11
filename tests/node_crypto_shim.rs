@@ -232,6 +232,24 @@ fn random_bytes_hex_valid() {
     );
 }
 
+#[test]
+fn random_bytes_rejects_non_integer() {
+    let result = eval_crypto(
+        r#"(() => {
+        try {
+            randomBytes(3.5);
+            return "no-throw";
+        } catch (e) {
+            return "threw:" + e.message;
+        }
+    })()"#,
+    );
+    assert!(
+        result.contains("non-negative integer"),
+        "Expected randomBytes to reject non-integer size, got: {result}"
+    );
+}
+
 // ─── randomInt Tests ────────────────────────────────────────────────────────
 
 #[test]
@@ -256,6 +274,24 @@ fn random_int_single_arg() {
     })()"#,
     );
     assert_eq!(result, "ok");
+}
+
+#[test]
+fn random_int_rejects_min_ge_max() {
+    let result = eval_crypto(
+        r#"(() => {
+        try {
+            randomInt(5, 5);
+            return "no-throw";
+        } catch (e) {
+            return "threw:" + e.message;
+        }
+    })()"#,
+    );
+    assert!(
+        result.contains("min must be less than max"),
+        "Expected min>=max to throw, got: {result}"
+    );
 }
 
 // ─── timingSafeEqual Tests ──────────────────────────────────────────────────
@@ -497,46 +533,52 @@ fn create_hmac_update_after_digest_throws() {
 }
 
 #[test]
-fn pbkdf2_sync_unimplemented_throws() {
-    let result = eval_crypto(
-        r#"(() => {
-        try {
-            pbkdf2Sync("password", "salt", 1000, 16, "sha256");
-            return "no-throw";
-        } catch (e) {
-            return "threw:" + e.message;
-        }
-    })()"#,
-    );
-    assert!(
-        result.contains("pbkdf2Sync is not implemented"),
-        "Expected pbkdf2Sync to fail loudly, got: {result}"
+fn pbkdf2_sync_derives_expected_key() {
+    let result =
+        eval_crypto(r#"pbkdf2Sync("password", "salt", 1000, 16, "sha256").toString("hex")"#);
+    assert_eq!(
+        result,
+        "632c2812e46d4604102ba7618e9d6d7d",
+        "pbkdf2Sync derived key mismatch"
     );
 }
 
 #[test]
-fn pbkdf2_async_unimplemented_reports_error() {
+fn pbkdf2_sync_accepts_digest_variants() {
+    let result = eval_crypto(
+        r#"pbkdf2Sync("password", "salt", 1000, 16, "SHA-256").toString("hex")"#,
+    );
+    assert_eq!(
+        result,
+        "632c2812e46d4604102ba7618e9d6d7d",
+        "pbkdf2Sync should accept digest variants"
+    );
+}
+
+#[test]
+fn pbkdf2_async_derives_expected_key() {
     let result = eval_crypto(
         r#"(() => {
         let outcome = "no-callback";
         pbkdf2("password", "salt", 1000, 16, "sha256", (err, value) => {
-            outcome = err ? "threw:" + err.message : "ok:" + value;
+            outcome = err ? "threw:" + err.message : value.toString("hex");
         });
         return outcome;
     })()"#,
     );
-    assert!(
-        result.contains("pbkdf2 is not implemented"),
-        "Expected pbkdf2 callback to receive unsupported error, got: {result}"
+    assert_eq!(
+        result,
+        "632c2812e46d4604102ba7618e9d6d7d",
+        "pbkdf2 async derived key mismatch"
     );
 }
 
 #[test]
-fn scrypt_sync_unimplemented_throws() {
+fn pbkdf2_sync_rejects_large_iterations() {
     let result = eval_crypto(
         r#"(() => {
         try {
-            scryptSync("password", "salt", 16);
+            pbkdf2Sync("password", "salt", 1000001, 16, "sha256");
             return "no-throw";
         } catch (e) {
             return "threw:" + e.message;
@@ -544,8 +586,92 @@ fn scrypt_sync_unimplemented_throws() {
     })()"#,
     );
     assert!(
-        result.contains("scryptSync is not implemented"),
-        "Expected scryptSync to fail loudly, got: {result}"
+        result.contains("iterations must be <= 1000000"),
+        "Expected pbkdf2Sync to reject large iterations, got: {result}"
+    );
+}
+
+#[test]
+fn scrypt_sync_derives_expected_key() {
+    let result = eval_crypto(r#"scryptSync("password", "salt", 16).toString("hex")"#);
+    assert_eq!(
+        result,
+        "745731af4484f323968969eda289aeee",
+        "scryptSync derived key mismatch"
+    );
+}
+
+#[test]
+fn scrypt_sync_accepts_encoding_string() {
+    let result = eval_crypto(r#"scryptSync("password", "salt", 16, "hex")"#);
+    assert_eq!(
+        result,
+        "745731af4484f323968969eda289aeee",
+        "scryptSync hex encoding mismatch"
+    );
+}
+
+#[test]
+fn scrypt_sync_accepts_options_encoding() {
+    let direct = eval_crypto(r#"scryptSync("password", "salt", 16, "hex")"#);
+    let result = eval_crypto(r#"scryptSync("password", "salt", 16, { encoding: "hex" })"#);
+    assert_eq!(
+        result, direct,
+        "scryptSync options encoding should match direct encoding string"
+    );
+}
+
+#[test]
+fn scrypt_sync_rejects_large_n() {
+    let result = eval_crypto(
+        r#"(() => {
+        try {
+            scryptSync("password", "salt", 16, { N: 2097152 });
+            return "no-throw";
+        } catch (e) {
+            return "threw:" + e.message;
+        }
+    })()"#,
+    );
+    assert!(
+        result.contains("N must be <= 2^20"),
+        "Expected scryptSync to reject large N, got: {result}"
+    );
+}
+
+#[test]
+fn scrypt_sync_rejects_excessive_memory() {
+    let result = eval_crypto(
+        r#"(() => {
+        try {
+            scryptSync("password", "salt", 16, { N: 262144, r: 16, p: 1 });
+            return "no-throw";
+        } catch (e) {
+            return "threw:" + e.message;
+        }
+    })()"#,
+    );
+    assert!(
+        result.contains("memory limit"),
+        "Expected scryptSync to reject excessive memory, got: {result}"
+    );
+}
+
+#[test]
+fn scrypt_sync_rejects_non_positive_rp() {
+    let result = eval_crypto(
+        r#"(() => {
+        try {
+            scryptSync("password", "salt", 16, { r: 0 });
+            return "no-throw";
+        } catch (e) {
+            return "threw:" + e.message;
+        }
+    })()"#,
+    );
+    assert!(
+        result.contains("r/p must be positive"),
+        "Expected scryptSync to reject r/p <= 0, got: {result}"
     );
 }
 

@@ -1,0 +1,4 @@
+sample.txt-1- alpha
+sample.txt:2: beta
+sample.txt-3- gamma
+sample.txt:4: beta

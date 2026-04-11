@@ -221,8 +221,9 @@
       "module": "node:test",
       "extensions_using": 7,
       "tier_breakdown": { "T3_npm": 4, "T3_gh": 3 },
-      "shim_status": "missing",
+      "shim_status": "partial",
       "criticality": "P3",
+      "notes": "Minimal runner (test/describe/it + hooks + run); reporters/concurrency not supported",
       "apis": []
     },
     {
@@ -619,7 +620,6 @@
       "missing_from_corpus": 8
     },
     "missing_modules_used_by_corpus": [
-      "node:test (7 ext)",
       "node:assert/strict (7 ext)",
       "node:tty (1 ext)",
       "node:zlib (1 ext)",

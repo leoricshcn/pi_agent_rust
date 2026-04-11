@@ -296,7 +296,7 @@ fn default_model_for_provider(provider: &str) -> &'static str {
         "openrouter" => "deepseek/deepseek-chat",
         "mistral" => "mistral-small-latest",
         "moonshotai" => "moonshot-v1-8k",
-        "alibaba" | "alibaba-cn" => "qwen-turbo",
+        "alibaba" | "alibaba-cn" | "alibaba-us" => "qwen-turbo",
         "deepseek" => "deepseek-chat",
         "fireworks" => "accounts/fireworks/models/llama-v3p1-8b-instruct",
         "togetherai" => "meta-llama/Llama-3.3-70B-Instruct-Turbo",

@@ -121,6 +121,20 @@
       }
     },
     {
+      "name": "grep_limit_notice_golden",
+      "description": "Limit notice formatting stays locked to golden output",
+      "setup": [
+        {"type": "create_file", "path": "test.txt", "content": "match1\nmatch2\nmatch3\nmatch4"}
+      ],
+      "input": {"pattern": "match", "limit": 2},
+      "expected": {
+        "content_golden": "grep_tool/limit_notice.txt",
+        "details_exact": {
+          "matchLimitReached": 2
+        }
+      }
+    },
+    {
       "name": "grep_with_context",
       "description": "Include context lines",
       "setup": [
@@ -164,6 +178,50 @@
           "linesTruncated": true
         }
       }
+    },
+    {
+      "name": "grep_context_matches_golden",
+      "description": "Context output formatting stays locked to golden output",
+      "setup": [
+        {"type": "create_file", "path": "sample.txt", "content": "alpha\nbeta\ngamma\nbeta\n"}
+      ],
+      "input": {"pattern": "beta", "context": 1},
+      "expected": {
+        "content_golden": "grep_tool/context_output.txt",
+        "details_none": true
+      }
+    },
+    {
+      "name": "grep_hashline_format",
+      "description": "Hashline mode emits N#AB tags in grep output",
+      "setup": [
+        {"type": "create_file", "path": "hashline.txt", "content": "alpha\nbeta"}
+      ],
+      "input": {"pattern": "beta", "path": "hashline.txt", "hashline": true},
+      "expected": {
+        "content_regex": "(?s)hashline\\.txt:2#[A-Z]{2}: beta",
+        "details_none": true
+      }
+    },
+    {
+      "name": "grep_hashline_with_context",
+      "description": "Hashline mode marks context lines with dash separators",
+      "setup": [
+        {"type": "create_file", "path": "hashline_context.txt", "content": "alpha\nbeta\ngamma"}
+      ],
+      "input": {"pattern": "beta", "path": "hashline_context.txt", "hashline": true, "context": 1},
+      "expected": {
+        "content_regex": "(?s)hashline_context\\.txt-1#[A-Z]{2}- alpha.*hashline_context\\.txt:2#[A-Z]{2}: beta.*hashline_context\\.txt-3#[A-Z]{2}- gamma",
+        "details_none": true
+      }
+    },
+    {
+      "name": "grep_outside_cwd",
+      "description": "Grep outside the working directory should be rejected",
+      "input": {"pattern": "needle", "path": "../"},
+      "expect_error": true,
+      "error_contains": "Cannot grep outside the working directory",
+      "expected": {}
     }
   ]
 }

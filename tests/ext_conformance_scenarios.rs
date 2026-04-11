@@ -211,6 +211,8 @@ struct ScenarioExpectation {
     #[serde(default)]
     active_tools: Option<Vec<String>>,
     #[serde(default)]
+    mcp_server_registered: Option<bool>,
+    #[serde(default)]
     content_types: Option<Vec<String>>,
     #[serde(default)]
     final_content_contains: Option<Vec<String>>,
@@ -640,6 +642,46 @@ fn execute_event_scenario(
                 .map_err(|e| format!("dispatch_event: {e}"))
         }
     })
+}
+
+/// Execute an MCP scenario: register an MCP server if specified in input.
+fn execute_mcp_scenario(
+    runtime: &JsExtensionRuntimeHandle,
+    manager: &ExtensionManager,
+    scenario: &Scenario,
+    extension_id: &str,
+) -> Result<Value, String> {
+    let Some(input) = scenario.input.as_ref() else {
+        return Ok(Value::Null);
+    };
+    let server = input
+        .get("server")
+        .ok_or("mcp scenario missing server")?;
+    let name = server
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or("mcp scenario missing server.name")?;
+
+    let spec = server.clone();
+    let result = common::run_async({
+        let runtime = runtime.clone();
+        let extension_id = extension_id.to_string();
+        let name = name.to_string();
+        async move {
+            runtime
+                .register_mcp_server(extension_id, name, spec)
+                .await
+                .map_err(|e| format!("register_mcp_server: {e}"))
+        }
+    })?;
+
+    let mut registered = result.clone();
+    if let Some(obj) = registered.as_object_mut() {
+        obj.entry("extension_id".to_string())
+            .or_insert_with(|| Value::String(extension_id.to_string()));
+    }
+    manager.register_mcp_server(registered);
+    Ok(result)
 }
 
 // ─── Expectation matchers ───────────────────────────────────────────────────
@@ -1091,6 +1133,17 @@ fn check_expectations_inner(
                     "active_tools: expected '{expected_tool}' in {actual_tools:?}"
                 ));
             }
+        }
+    }
+
+    // Check mcp_server_registered: verify MCP servers registered via snapshot
+    if let Some(expected_registered) = expect.mcp_server_registered {
+        let servers = manager.extension_mcp_servers();
+        let has_servers = !servers.is_empty();
+        if has_servers != expected_registered {
+            diffs.push(format!(
+                "mcp_server_registered: expected {expected_registered} got {has_servers}"
+            ));
         }
     }
 
@@ -2416,6 +2469,12 @@ fn run_scenario(
         }
         "command" => execute_command_scenario(&loaded, scenario, &ext_path),
         "event" => execute_event_scenario(&loaded, scenario, &ext_path),
+        "mcp" => execute_mcp_scenario(
+            &loaded.runtime,
+            &loaded.manager,
+            scenario,
+            &ext.extension_id,
+        ),
         "provider" => {
             // Provider scenarios check registration, not execution
             if let Some(expect) = &scenario.expect {
@@ -2497,7 +2556,7 @@ fn run_scenario(
 /// Run a scenario using mock-based extension loading.
 #[allow(clippy::too_many_lines)]
 fn run_scenario_with_mocks(
-    _ext: &ScenarioExtension,
+    ext: &ScenarioExtension,
     scenario: &Scenario,
     ext_path: &Path,
     start: Instant,
@@ -2572,6 +2631,12 @@ fn run_scenario_with_mocks(
         }
         "command" => execute_command_scenario_with_mocks(&loaded, scenario, ext_path),
         "event" => execute_event_scenario_with_mocks(&loaded, scenario, ext_path),
+        "mcp" => execute_mcp_scenario(
+            &loaded.runtime,
+            &loaded.manager,
+            scenario,
+            &ext.extension_id,
+        ),
         "provider" | "flag" | "shortcut" | "registration" => {
             if let Some(expect) = &scenario.expect {
                 let diffs = check_expectations_with_mocks(expect, &Ok(Value::Null), &loaded);

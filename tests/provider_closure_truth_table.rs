@@ -289,6 +289,11 @@ fn qwen_has_eleven_total_cassettes() {
         4,
         "alibaba-cn should have 4 cassettes"
     );
+    assert_eq!(
+        by_entry["alibaba-us"]["count"].as_u64().unwrap(),
+        0,
+        "alibaba-us should have 0 cassettes until fixtures are added"
+    );
 }
 
 // ─── Section 5: Aggregate summary consistency ───────────────────────────────
@@ -308,11 +313,11 @@ fn aggregate_total_providers_matches() {
 fn aggregate_total_pi_entries_matches() {
     let doc = load_truth_table();
     let summary = &doc["aggregate_summary"];
-    // groq(1) + cerebras(1) + openrouter(1) + kimi(3) + qwen(2) = 8
+    // groq(1) + cerebras(1) + openrouter(1) + kimi(3) + qwen(3) = 9
     assert_eq!(
         summary["total_pi_entries"].as_u64().unwrap(),
-        8,
-        "Should have 8 total Pi provider entries"
+        9,
+        "Should have 9 total Pi provider entries"
     );
 }
 
@@ -589,7 +594,7 @@ fn aggregate_discrepancy_count_matches_refs() {
     );
 }
 
-// ─── Section 13: Kimi has exactly 3 variants, Qwen has exactly 2 ───────────
+// ─── Section 13: Kimi has exactly 3 variants, Qwen has exactly 3 ───────────
 
 #[test]
 fn kimi_has_three_variants() {
@@ -606,16 +611,17 @@ fn kimi_has_three_variants() {
 }
 
 #[test]
-fn qwen_has_two_variants() {
+fn qwen_has_three_variants() {
     let doc = load_truth_table();
     let variants = doc["providers"]["qwen"]["variants"].as_object().unwrap();
     assert_eq!(
         variants.len(),
-        2,
-        "Qwen should have exactly 2 variants (alibaba, alibaba-cn)"
+        3,
+        "Qwen should have exactly 3 variants (alibaba, alibaba-cn, alibaba-us)"
     );
     assert!(variants.contains_key("alibaba"));
     assert!(variants.contains_key("alibaba-cn"));
+    assert!(variants.contains_key("alibaba-us"));
 }
 
 // ─── Section 14: kimi-for-coding uses Anthropic API ─────────────────────────

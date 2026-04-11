@@ -232,6 +232,23 @@ export default function init(pi) {
 }
 "#;
 
+/// Extension that validates `signal` presence for `session_before`_* events.
+const SESSION_SIGNAL_EXT: &str = r#"
+export default function init(pi) {
+    const probe = (event) => {
+        const sig = event && event.signal;
+        return {
+            hasSignal: !!sig,
+            aborted: sig ? !!sig.aborted : null,
+            hasAddListener: !!(sig && typeof sig.addEventListener === 'function'),
+        };
+    };
+
+    pi.on("session_before_compact", probe);
+    pi.on("session_before_tree", probe);
+}
+"#;
+
 // ---------------------------------------------------------------------------
 // Tests: dispatch_event (fire-and-forget)
 // ---------------------------------------------------------------------------
@@ -336,6 +353,70 @@ fn dispatch_event_with_response_none_when_no_hooks() {
     });
 
     assert!(response.is_none(), "Expected None when no hooks registered");
+}
+
+fn assert_signal_probe(response: &Value) {
+    assert_eq!(
+        response.get("hasSignal").and_then(Value::as_bool),
+        Some(true),
+        "expected injected signal"
+    );
+    assert_eq!(
+        response.get("aborted").and_then(Value::as_bool),
+        Some(false),
+        "expected non-aborted signal"
+    );
+    assert_eq!(
+        response.get("hasAddListener").and_then(Value::as_bool),
+        Some(true),
+        "expected AbortSignal-like interface"
+    );
+}
+
+#[test]
+fn session_before_compact_injects_signal() {
+    let harness = common::TestHarness::new("session_before_compact_injects_signal");
+    let manager = load_js_extension(&harness, SESSION_SIGNAL_EXT);
+
+    let response = common::run_async({
+        let manager = manager.clone();
+        async move {
+            manager
+                .dispatch_event_with_response(
+                    ExtensionEventName::SessionBeforeCompact,
+                    Some(json!({"preparation": {}, "branchEntries": []})),
+                    5000,
+                )
+                .await
+                .expect("dispatch session_before_compact")
+        }
+    });
+
+    let response = response.expect("expected response");
+    assert_signal_probe(&response);
+}
+
+#[test]
+fn session_before_tree_injects_signal() {
+    let harness = common::TestHarness::new("session_before_tree_injects_signal");
+    let manager = load_js_extension(&harness, SESSION_SIGNAL_EXT);
+
+    let response = common::run_async({
+        let manager = manager.clone();
+        async move {
+            manager
+                .dispatch_event_with_response(
+                    ExtensionEventName::SessionBeforeTree,
+                    Some(json!({"preparation": {"branchCount": 0, "entryCount": 0}})),
+                    5000,
+                )
+                .await
+                .expect("dispatch session_before_tree")
+        }
+    });
+
+    let response = response.expect("expected response");
+    assert_signal_probe(&response);
 }
 
 // ---------------------------------------------------------------------------

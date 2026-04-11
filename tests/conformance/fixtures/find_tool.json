@@ -45,6 +45,23 @@
       }
     },
     {
+      "name": "find_respects_gitignore",
+      "description": "Find honors .gitignore entries",
+      "setup": [
+        {"type": "create_file", "path": ".gitignore", "content": "ignored.txt\nignored_dir/\n"},
+        {"type": "create_file", "path": "kept.txt", "content": ""},
+        {"type": "create_file", "path": "ignored.txt", "content": ""},
+        {"type": "create_dir", "path": "ignored_dir"},
+        {"type": "create_file", "path": "ignored_dir/inside.txt", "content": ""}
+      ],
+      "input": {"pattern": "*.txt"},
+      "expected": {
+        "content_contains": ["kept.txt"],
+        "content_not_contains": ["ignored.txt", "ignored_dir/inside.txt"],
+        "details_none": true
+      }
+    },
+    {
       "name": "find_with_limit",
       "description": "Find respects limit parameter",
       "setup": [
@@ -60,6 +77,20 @@
         "details_exact": {
           "resultLimitReached": 3
         }
+      }
+    },
+    {
+      "name": "find_limit_notice_golden",
+      "description": "Limit notice formatting stays locked to golden output",
+      "setup": [
+        {"type": "create_file", "path": "a.txt", "content": ""},
+        {"type": "create_file", "path": "b.txt", "content": ""},
+        {"type": "create_file", "path": "c.txt", "content": ""}
+      ],
+      "input": {"pattern": "*.txt", "limit": 2},
+      "expected": {
+        "content_golden": "find_tool/limit_notice.txt",
+        "details_golden": "find_tool/limit_details.json"
       }
     },
     {
@@ -89,6 +120,14 @@
         "content_contains": ["old.txt", "new.txt"],
         "details_none": true
       }
+    },
+    {
+      "name": "find_outside_cwd",
+      "description": "Find outside the working directory should be rejected",
+      "input": {"pattern": "*.txt", "path": "../"},
+      "expect_error": true,
+      "error_contains": "Cannot find outside the working directory",
+      "expected": {}
     }
   ]
 }

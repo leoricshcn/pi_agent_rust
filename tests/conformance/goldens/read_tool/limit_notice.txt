@@ -1,0 +1,4 @@
+    1→line1
+    2→line2
+
+[2 more lines in file. Use offset=3 to continue.]

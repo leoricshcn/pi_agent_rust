@@ -92,7 +92,7 @@ struct GoldenExpected {
 struct GoldenTestHarness {
     harness: TestHarness,
     binary_path: PathBuf,
-    env: BTreeMap<String, String>,
+    base_env: BTreeMap<String, String>,
     run_seq: Cell<usize>,
 }
 
@@ -101,32 +101,32 @@ impl GoldenTestHarness {
         let harness = TestHarness::new(name);
         let binary_path = PathBuf::from(env!("CARGO_BIN_EXE_pi"));
 
-        let mut env = BTreeMap::new();
+        let mut base_env = BTreeMap::new();
         let env_root = harness.temp_path("pi-env");
         let _ = fs::create_dir_all(&env_root);
 
         // Fully isolate global/project state for determinism.
-        env.insert("HOME".to_string(), env_root.display().to_string());
-        env.insert("USERPROFILE".to_string(), env_root.display().to_string());
-        env.insert(
+        base_env.insert("HOME".to_string(), env_root.display().to_string());
+        base_env.insert("USERPROFILE".to_string(), env_root.display().to_string());
+        base_env.insert(
             "PI_CODING_AGENT_DIR".to_string(),
             env_root.join("agent").display().to_string(),
         );
-        env.insert(
+        base_env.insert(
             "PI_CONFIG_PATH".to_string(),
             env_root.join("settings.json").display().to_string(),
         );
-        env.insert(
+        base_env.insert(
             "PI_SESSIONS_DIR".to_string(),
             env_root.join("sessions").display().to_string(),
         );
-        env.insert(
+        base_env.insert(
             "PI_PACKAGE_DIR".to_string(),
             env_root.join("packages").display().to_string(),
         );
-        env.insert("npm_config_audit".to_string(), "false".to_string());
-        env.insert("npm_config_fund".to_string(), "false".to_string());
-        env.insert(
+        base_env.insert("npm_config_audit".to_string(), "false".to_string());
+        base_env.insert("npm_config_fund".to_string(), "false".to_string());
+        base_env.insert(
             "npm_config_update_notifier".to_string(),
             "false".to_string(),
         );
@@ -134,12 +134,12 @@ impl GoldenTestHarness {
         Self {
             harness,
             binary_path,
-            env,
+            base_env,
             run_seq: Cell::new(0),
         }
     }
 
-    fn run_fixture(&mut self, fixture: &GoldenFixture) -> CliOutput {
+    fn run_fixture(&self, fixture: &GoldenFixture) -> CliOutput {
         let seq = self.run_seq.get();
         self.run_seq.set(seq + 1);
 
@@ -155,19 +155,21 @@ impl GoldenTestHarness {
             arg_replacements.insert(placeholder.clone(), path.display().to_string());
         }
 
+        let mut run_env = self.base_env.clone();
+
         // Apply env overrides.
         for (key, value) in &fixture.env_overrides {
-            self.env.insert(key.clone(), value.clone());
+            run_env.insert(key.clone(), value.clone());
         }
 
         // Set up VCR cassette if provided.
         if let Some(cassette) = &fixture.cassette {
-            self.setup_vcr(&fixture.scenario, cassette);
+            self.setup_vcr(&fixture.scenario, cassette, &mut run_env);
         } else if fixture.cassette_dynamic {
             // For dynamic cassettes, use the template (actual body matching
             // is relaxed — the response is what matters).
             if let Some(template) = &fixture.cassette_template {
-                self.setup_vcr(&fixture.scenario, template);
+                self.setup_vcr(&fixture.scenario, template, &mut run_env);
             }
         }
 
@@ -185,10 +187,15 @@ impl GoldenTestHarness {
             .collect();
         let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
-        self.run_binary(&args_refs, fixture.stdin.as_deref())
+        self.run_binary(&args_refs, fixture.stdin.as_deref(), &run_env)
     }
 
-    fn setup_vcr(&mut self, scenario: &str, cassette: &Value) {
+    fn setup_vcr(
+        &self,
+        scenario: &str,
+        cassette: &Value,
+        env: &mut BTreeMap<String, String>,
+    ) {
         let cassette_dir = self.harness.temp_path("vcr-cassettes");
         fs::create_dir_all(&cassette_dir).expect("create cassette dir");
 
@@ -203,22 +210,23 @@ impl GoldenTestHarness {
         )
         .expect("write cassette");
 
-        self.env
-            .insert("VCR_MODE".to_string(), "playback".to_string());
-        self.env.insert(
+        env.insert("VCR_MODE".to_string(), "playback".to_string());
+        env.insert(
             "VCR_CASSETTE_DIR".to_string(),
             cassette_dir.display().to_string(),
         );
-        self.env
-            .insert("PI_VCR_TEST_NAME".to_string(), cassette_name.to_string());
-        self.env
-            .insert("ANTHROPIC_API_KEY".to_string(), "test-vcr-key".to_string());
-        self.env.insert("PI_TEST_MODE".to_string(), "1".to_string());
-        self.env
-            .insert("VCR_DEBUG_BODY".to_string(), "1".to_string());
+        env.insert("PI_VCR_TEST_NAME".to_string(), cassette_name.to_string());
+        env.insert("ANTHROPIC_API_KEY".to_string(), "test-vcr-key".to_string());
+        env.insert("PI_TEST_MODE".to_string(), "1".to_string());
+        env.insert("VCR_DEBUG_BODY".to_string(), "1".to_string());
     }
 
-    fn run_binary(&self, args: &[&str], stdin: Option<&str>) -> CliOutput {
+    fn run_binary(
+        &self,
+        args: &[&str],
+        stdin: Option<&str>,
+        env: &BTreeMap<String, String>,
+    ) -> CliOutput {
         self.harness
             .log()
             .info("action", format!("CLI: pi {}", args.join(" ")));
@@ -235,7 +243,7 @@ impl GoldenTestHarness {
         command.env_remove("PI_AWS_ACCESS_KEY_ID");
         command
             .args(args)
-            .envs(self.env.clone())
+            .envs(env)
             .current_dir(self.harness.temp_dir())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -383,7 +391,12 @@ fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOut
         || !fixture.expected.json_event_sequence.is_empty()
         || fixture.expected.json_line_count.is_some()
     {
-        let lines = parse_json_lines(&output.stdout);
+        let lines = parse_json_lines(&output.stdout).unwrap_or_else(|err| {
+            panic!(
+                "[{scenario}] stdout JSON parse failed: {err}\nstdout:\n{}",
+                output.stdout
+            );
+        });
 
         if let Some(expected_count) = fixture.expected.json_line_count {
             assert_eq!(
@@ -394,7 +407,11 @@ fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOut
             );
         }
 
-        if fixture.expected.json_session_header && !lines.is_empty() {
+        if fixture.expected.json_session_header {
+            assert!(
+                !lines.is_empty(),
+                "[{scenario}] expected JSON session header but got no JSON lines"
+            );
             assert_eq!(
                 lines[0]["type"], "session",
                 "[{scenario}] first JSON line must be session header"
@@ -419,22 +436,24 @@ fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOut
 
         if fixture.expected.json_agent_start_has_session_id {
             let agent_start = lines.iter().find(|v| v["type"] == "agent_start");
-            if let Some(event) = agent_start {
-                assert!(
-                    event["sessionId"].as_str().is_some_and(|s| !s.is_empty()),
-                    "[{scenario}] agent_start must have non-empty sessionId"
-                );
-            }
+            let Some(event) = agent_start else {
+                panic!("[{scenario}] expected agent_start event but none was found");
+            };
+            assert!(
+                event["sessionId"].as_str().is_some_and(|s| !s.is_empty()),
+                "[{scenario}] agent_start must have non-empty sessionId"
+            );
         }
 
         if fixture.expected.json_agent_end_has_messages {
             let agent_end = lines.iter().find(|v| v["type"] == "agent_end");
-            if let Some(event) = agent_end {
-                assert!(
-                    event["messages"].is_array(),
-                    "[{scenario}] agent_end must have messages array"
-                );
-            }
+            let Some(event) = agent_end else {
+                panic!("[{scenario}] expected agent_end event but none was found");
+            };
+            assert!(
+                event["messages"].is_array(),
+                "[{scenario}] agent_end must have messages array"
+            );
         }
     }
 
@@ -463,24 +482,44 @@ fn assert_json_event_order(scenario: &str, expected: &[String], actual: &[&str])
     }
 }
 
-fn parse_json_lines(stdout: &str) -> Vec<Value> {
-    stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect()
+fn parse_json_lines(stdout: &str) -> Result<Vec<Value>, String> {
+    let mut lines = Vec::new();
+    for (idx, line) in stdout.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Value>(line) {
+            Ok(value) => lines.push(value),
+            Err(err) => {
+                return Err(format!("line {}: {err}", idx + 1));
+            }
+        }
+    }
+    Ok(lines)
 }
 
 fn count_jsonl_files(dir: &Path) -> usize {
     if !dir.exists() {
         return 0;
     }
-    fs::read_dir(dir).map_or(0, |entries| {
-        entries
-            .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
-            .count()
-    })
+    let mut count = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                stack.push(entry_path);
+                continue;
+            }
+            if entry_path.extension().is_some_and(|ext| ext == "jsonl") {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -537,7 +576,7 @@ fn run_surface_fixtures(surface: &str) {
     for fixture_path in &fixtures {
         let fixture = load_fixture(fixture_path);
         let test_name = format!("golden_{surface}_{}", fixture.scenario);
-        let mut harness = GoldenTestHarness::new(&test_name);
+        let harness = GoldenTestHarness::new(&test_name);
 
         harness.harness.log().info_ctx(
             "golden",
@@ -666,4 +705,163 @@ fn golden_corpus_manifest_coverage() {
         "[golden/manifest] {total_fixtures} fixtures across {} surfaces",
         required_surfaces.len()
     );
+}
+
+#[test]
+fn parse_json_lines_rejects_invalid_lines() {
+    let stdout = r#"
+{"type":"session","id":"abc"}
+not-json
+{"type":"agent_start"}
+"#;
+    let err = parse_json_lines(stdout).expect_err("invalid JSON line should fail");
+    assert!(err.contains("line 3"));
+}
+
+#[test]
+fn parse_json_lines_ignores_blank_lines() {
+    let stdout = r#"
+
+{"type":"session","id":"abc"}
+
+{"type":"agent_end"}
+
+"#;
+    let lines = parse_json_lines(stdout).expect("valid JSON lines should parse");
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["type"], "session");
+    assert_eq!(lines[1]["type"], "agent_end");
+}
+
+#[test]
+fn json_event_order_allows_gaps() {
+    let expected = vec!["session".to_string(), "agent_end".to_string()];
+    let actual = ["session", "agent_start", "tool_start", "agent_end"];
+    assert_json_event_order("gap_test", &expected, &actual);
+}
+
+#[test]
+fn json_session_header_requires_lines() {
+    let harness = TestHarness::new("json_session_header_requires_lines");
+    let fixture = GoldenFixture {
+        schema: GOLDEN_SCHEMA.to_string(),
+        scenario: "json_session_header_requires_lines".to_string(),
+        surface: "json_mode".to_string(),
+        description: String::new(),
+        cli_args: Vec::new(),
+        stdin: None,
+        env_overrides: BTreeMap::new(),
+        cassette: None,
+        cassette_dynamic: false,
+        cassette_template: None,
+        temp_files: BTreeMap::new(),
+        expected: GoldenExpected {
+            exit_code: None,
+            exit_code_nonzero: false,
+            stdout_contains: Vec::new(),
+            stdout_not_contains: Vec::new(),
+            stderr_not_contains: Vec::new(),
+            no_session_files: false,
+            json_event_sequence: Vec::new(),
+            json_session_header: true,
+            json_agent_start_has_session_id: false,
+            json_agent_end_has_messages: false,
+            json_line_count: None,
+        },
+    };
+    let output = CliOutput {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        duration: Duration::from_secs(0),
+    };
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_golden(&harness, &fixture, &output);
+    }));
+    assert!(result.is_err(), "expected missing session header to fail");
+}
+
+#[test]
+fn json_agent_start_requires_event() {
+    let harness = TestHarness::new("json_agent_start_requires_event");
+    let fixture = GoldenFixture {
+        schema: GOLDEN_SCHEMA.to_string(),
+        scenario: "json_agent_start_requires_event".to_string(),
+        surface: "json_mode".to_string(),
+        description: String::new(),
+        cli_args: Vec::new(),
+        stdin: None,
+        env_overrides: BTreeMap::new(),
+        cassette: None,
+        cassette_dynamic: false,
+        cassette_template: None,
+        temp_files: BTreeMap::new(),
+        expected: GoldenExpected {
+            exit_code: None,
+            exit_code_nonzero: false,
+            stdout_contains: Vec::new(),
+            stdout_not_contains: Vec::new(),
+            stderr_not_contains: Vec::new(),
+            no_session_files: false,
+            json_event_sequence: Vec::new(),
+            json_session_header: true,
+            json_agent_start_has_session_id: true,
+            json_agent_end_has_messages: false,
+            json_line_count: None,
+        },
+    };
+    let output = CliOutput {
+        exit_code: 0,
+        stdout: r#"{"type":"session","id":"abc"}"#.to_string(),
+        stderr: String::new(),
+        duration: Duration::from_secs(0),
+    };
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_golden(&harness, &fixture, &output);
+    }));
+    assert!(result.is_err(), "expected missing agent_start to fail");
+}
+
+#[test]
+fn json_agent_end_requires_event() {
+    let harness = TestHarness::new("json_agent_end_requires_event");
+    let fixture = GoldenFixture {
+        schema: GOLDEN_SCHEMA.to_string(),
+        scenario: "json_agent_end_requires_event".to_string(),
+        surface: "json_mode".to_string(),
+        description: String::new(),
+        cli_args: Vec::new(),
+        stdin: None,
+        env_overrides: BTreeMap::new(),
+        cassette: None,
+        cassette_dynamic: false,
+        cassette_template: None,
+        temp_files: BTreeMap::new(),
+        expected: GoldenExpected {
+            exit_code: None,
+            exit_code_nonzero: false,
+            stdout_contains: Vec::new(),
+            stdout_not_contains: Vec::new(),
+            stderr_not_contains: Vec::new(),
+            no_session_files: false,
+            json_event_sequence: Vec::new(),
+            json_session_header: true,
+            json_agent_start_has_session_id: false,
+            json_agent_end_has_messages: true,
+            json_line_count: None,
+        },
+    };
+    let output = CliOutput {
+        exit_code: 0,
+        stdout: r#"{"type":"session","id":"abc"}"#.to_string(),
+        stderr: String::new(),
+        duration: Duration::from_secs(0),
+    };
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_golden(&harness, &fixture, &output);
+    }));
+    assert!(result.is_err(), "expected missing agent_end to fail");
 }

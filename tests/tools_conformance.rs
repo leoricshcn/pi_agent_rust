@@ -72,6 +72,229 @@ mod read_tool {
     }
 
     #[test]
+    fn test_read_offset_zero_matches_default_output() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let test_file = temp_dir.path().join("test.txt");
+            std::fs::write(&test_file, "line1\nline2\nline3").unwrap();
+
+            let tool = pi::tools::ReadTool::new(temp_dir.path());
+            let default_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": test_file.to_string_lossy() }),
+                    None,
+                )
+                .await
+                .expect("default read should succeed");
+            let offset_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": test_file.to_string_lossy(), "offset": 0 }),
+                    None,
+                )
+                .await
+                .expect("offset=0 read should succeed");
+
+            let default_text = get_text_content(&default_result.content);
+            let offset_text = get_text_content(&offset_result.content);
+            assert_eq!(
+                default_text, offset_text,
+                "offset=0 should match the default read output"
+            );
+            assert!(default_result.details.is_none());
+            assert!(offset_result.details.is_none());
+        });
+    }
+
+    #[test]
+    fn test_read_large_limit_matches_default_output() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let test_file = temp_dir.path().join("test.txt");
+            std::fs::write(&test_file, "line1\nline2\nline3").unwrap();
+
+            let tool = pi::tools::ReadTool::new(temp_dir.path());
+            let default_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": test_file.to_string_lossy() }),
+                    None,
+                )
+                .await
+                .expect("default read should succeed");
+            let limit_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": test_file.to_string_lossy(), "limit": 100 }),
+                    None,
+                )
+                .await
+                .expect("large limit read should succeed");
+
+            let default_text = get_text_content(&default_result.content);
+            let limit_text = get_text_content(&limit_result.content);
+            assert_eq!(
+                default_text, limit_text,
+                "limit larger than file length should match default output"
+            );
+            assert!(default_result.details.is_none());
+            assert!(limit_result.details.is_none());
+        });
+    }
+
+    #[test]
+    fn test_read_crlf_matches_lf_output() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let lf_path = temp_dir.path().join("lf.txt");
+            let crlf_path = temp_dir.path().join("crlf.txt");
+            std::fs::write(&lf_path, "line1\nline2\nline3").unwrap();
+            std::fs::write(&crlf_path, "line1\r\nline2\r\nline3").unwrap();
+
+            let tool = pi::tools::ReadTool::new(temp_dir.path());
+            let lf_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": lf_path.to_string_lossy() }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+            let crlf_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": crlf_path.to_string_lossy() }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let lf_text = get_text_content(&lf_result.content);
+            let crlf_text = get_text_content(&crlf_result.content);
+            assert_eq!(
+                lf_text, crlf_text,
+                "CRLF normalization should match LF output"
+            );
+            assert!(lf_result.details.is_none());
+            assert!(crlf_result.details.is_none());
+        });
+    }
+
+    #[test]
+    fn test_read_cr_only_matches_lf_output() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let lf_path = temp_dir.path().join("lf.txt");
+            let cr_path = temp_dir.path().join("cr.txt");
+            std::fs::write(&lf_path, "line1\nline2\nline3").unwrap();
+            std::fs::write(&cr_path, "line1\rline2\rline3").unwrap();
+
+            let tool = pi::tools::ReadTool::new(temp_dir.path());
+            let lf_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": lf_path.to_string_lossy() }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+            let cr_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": cr_path.to_string_lossy() }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let lf_text = get_text_content(&lf_result.content);
+            let cr_text = get_text_content(&cr_result.content);
+            assert_eq!(
+                lf_text, cr_text,
+                "CR-only normalization should match LF output"
+            );
+            assert!(lf_result.details.is_none());
+            assert!(cr_result.details.is_none());
+        });
+    }
+
+    #[test]
+    fn test_read_hashline_is_deterministic() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let path = temp_dir.path().join("hashline.txt");
+            std::fs::write(&path, "alpha\nbeta\n").unwrap();
+
+            let tool = pi::tools::ReadTool::new(temp_dir.path());
+            let input = serde_json::json!({
+                "path": path.to_string_lossy(),
+                "hashline": true
+            });
+
+            let first = tool
+                .execute("test-id", input.clone(), None)
+                .await
+                .expect("first read should succeed");
+            let second = tool
+                .execute("test-id", input, None)
+                .await
+                .expect("second read should succeed");
+
+            let first_text = get_text_content(&first.content);
+            let second_text = get_text_content(&second.content);
+            assert_eq!(
+                first_text, second_text,
+                "hashline output should be deterministic across reads"
+            );
+        });
+    }
+
+    #[test]
+    fn test_read_hashline_subset_matches_full_output() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let path = temp_dir.path().join("hashline_subset.txt");
+            std::fs::write(&path, "alpha\nbeta\ngamma\ndelta\nepsilon\n").unwrap();
+
+            let tool = pi::tools::ReadTool::new(temp_dir.path());
+            let full = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": path.to_string_lossy(), "hashline": true }),
+                    None,
+                )
+                .await
+                .expect("full hashline read should succeed");
+            let subset = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({
+                        "path": path.to_string_lossy(),
+                        "hashline": true,
+                        "offset": 3,
+                        "limit": 2
+                    }),
+                    None,
+                )
+                .await
+                .expect("subset hashline read should succeed");
+
+            let full_text = get_text_content(&full.content);
+            let subset_text = get_text_content(&subset.content);
+            let full_lines: Vec<&str> = full_text.lines().collect();
+            let subset_lines: Vec<&str> = subset_text.lines().collect();
+            let start = 2; // offset 3 => 0-indexed 2
+            let end = start + 2;
+            assert_eq!(
+                subset_lines,
+                &full_lines[start..end],
+                "subset hashline output should match the corresponding full slice"
+            );
+        });
+    }
+
+    #[test]
     fn test_read_offset_beyond_eof_reports_error() {
         asupersync::test_utils::run_test(|| async {
             let harness = TestHarness::new("read_offset_beyond_eof_reports_error");
@@ -112,7 +335,14 @@ mod read_tool {
                 .await
                 .expect("should succeed with truncation guidance");
             let text = get_text_content(&result.content);
-            assert!(text.contains("exceeds 50.0KB limit"));
+            let expected_limit = format!(
+                "exceeds {} limit",
+                format_size(pi::tools::DEFAULT_MAX_BYTES)
+            );
+            assert!(
+                text.contains(&expected_limit),
+                "expected limit hint '{expected_limit}', got: {text}"
+            );
             let details = result.details.expect("expected truncation details");
             let truncation = details
                 .get("truncation")
@@ -405,6 +635,130 @@ mod edit_tool {
     }
 
     #[test]
+    fn test_edit_crlf_matches_lf_diff_and_preserves_endings() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let lf_path = temp_dir.path().join("lf.txt");
+            let crlf_path = temp_dir.path().join("crlf.txt");
+            std::fs::write(&lf_path, "alpha\nbeta\ngamma").unwrap();
+            std::fs::write(&crlf_path, "alpha\r\nbeta\r\ngamma").unwrap();
+
+            let tool = pi::tools::EditTool::new(temp_dir.path());
+
+            let lf_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({
+                        "path": lf_path.to_string_lossy(),
+                        "oldText": "beta",
+                        "newText": "delta"
+                    }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let crlf_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({
+                        "path": crlf_path.to_string_lossy(),
+                        "oldText": "beta",
+                        "newText": "delta"
+                    }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let lf_details = lf_result.details.as_ref().expect("lf details");
+            let crlf_details = crlf_result.details.as_ref().expect("crlf details");
+            assert_eq!(
+                lf_details.get("diff"),
+                crlf_details.get("diff"),
+                "CRLF diff should match LF diff"
+            );
+            assert_eq!(
+                lf_details.get("firstChangedLine"),
+                crlf_details.get("firstChangedLine")
+            );
+
+            let lf_content = std::fs::read_to_string(&lf_path).unwrap();
+            let crlf_content = std::fs::read_to_string(&crlf_path).unwrap();
+            assert!(
+                !lf_content.contains('\r'),
+                "LF file should not contain carriage returns"
+            );
+            assert!(
+                crlf_content.contains("\r\n"),
+                "CRLF file should preserve CRLF endings"
+            );
+        });
+    }
+
+    #[test]
+    fn test_edit_cr_only_matches_lf_diff_and_preserves_endings() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let lf_path = temp_dir.path().join("lf.txt");
+            let cr_path = temp_dir.path().join("cr.txt");
+            std::fs::write(&lf_path, "alpha\nbeta\ngamma").unwrap();
+            std::fs::write(&cr_path, "alpha\rbeta\rgamma").unwrap();
+
+            let tool = pi::tools::EditTool::new(temp_dir.path());
+
+            let lf_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({
+                        "path": lf_path.to_string_lossy(),
+                        "oldText": "beta",
+                        "newText": "delta"
+                    }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let cr_result = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({
+                        "path": cr_path.to_string_lossy(),
+                        "oldText": "beta",
+                        "newText": "delta"
+                    }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let lf_details = lf_result.details.as_ref().expect("lf details");
+            let cr_details = cr_result.details.as_ref().expect("cr details");
+            assert_eq!(
+                lf_details.get("diff"),
+                cr_details.get("diff"),
+                "CR-only diff should match LF diff"
+            );
+            assert_eq!(
+                lf_details.get("firstChangedLine"),
+                cr_details.get("firstChangedLine")
+            );
+
+            let lf_content = std::fs::read_to_string(&lf_path).unwrap();
+            let cr_content = std::fs::read_to_string(&cr_path).unwrap();
+            assert!(
+                !lf_content.contains('\r'),
+                "LF file should not contain carriage returns"
+            );
+            assert!(
+                cr_content.contains('\r') && !cr_content.contains('\n'),
+                "CR-only file should preserve CR-only endings"
+            );
+        });
+    }
+
+    #[test]
     fn test_edit_missing_file_reports_not_found() {
         asupersync::test_utils::run_test(|| async {
             let harness = TestHarness::new("edit_missing_file_reports_not_found");
@@ -426,6 +780,53 @@ mod edit_tool {
                     ctx.push(("message".into(), message.clone()));
                 });
             assert!(message.contains("File not found"));
+        });
+    }
+
+    #[test]
+    fn test_edit_directory_reports_error() {
+        asupersync::test_utils::run_test(|| async {
+            let harness = TestHarness::new("edit_directory_reports_error");
+            let dir = harness.create_dir("not_a_file");
+            let tool = pi::tools::EditTool::new(harness.temp_dir());
+            let input = serde_json::json!({
+                "path": dir.to_string_lossy(),
+                "oldText": "old",
+                "newText": "new"
+            });
+
+            let err = tool
+                .execute("test-id", input, None)
+                .await
+                .expect_err("should error");
+            let message = err.to_string();
+            assert!(message.contains("not a regular file"));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_edit_permission_denied_is_reported() {
+        asupersync::test_utils::run_test(|| async {
+            let harness = TestHarness::new("edit_permission_denied_is_reported");
+            let path = harness.create_file("locked.txt", b"secret");
+            let mut perms = std::fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o000);
+            std::fs::set_permissions(&path, perms).unwrap();
+
+            let tool = pi::tools::EditTool::new(harness.temp_dir());
+            let input = serde_json::json!({
+                "path": path.to_string_lossy(),
+                "oldText": "secret",
+                "newText": "public"
+            });
+
+            let err = tool
+                .execute("test-id", input, None)
+                .await
+                .expect_err("should error");
+            let message = err.to_string().to_lowercase();
+            assert!(message.contains("permission"));
         });
     }
 
@@ -682,6 +1083,29 @@ mod grep_tool {
     }
 
     #[test]
+    fn test_grep_zero_limit_rejected() {
+        asupersync::test_utils::run_test(|| async {
+            let harness = TestHarness::new("grep_zero_limit_rejected");
+            harness.create_file("sample.txt", b"alpha\nbeta\n");
+            let tool = pi::tools::GrepTool::new(harness.temp_dir());
+            let input = serde_json::json!({
+                "pattern": "alpha",
+                "limit": 0
+            });
+
+            let err = tool
+                .execute("test-id", input, None)
+                .await
+                .expect_err("should error");
+            let message = err.to_string();
+            assert!(
+                message.contains("`limit` must be greater than 0"),
+                "unexpected error message: {message}"
+            );
+        });
+    }
+
+    #[test]
     fn test_grep_long_line_truncates_and_marks_details() {
         asupersync::test_utils::run_test(|| async {
             let harness = TestHarness::new("grep_long_line_truncates_and_marks_details");
@@ -706,6 +1130,121 @@ mod grep_tool {
             assert_eq!(
                 details.get("linesTruncated"),
                 Some(&serde_json::Value::Bool(true))
+            );
+        });
+    }
+
+    #[test]
+    fn test_grep_literal_matches_plain_pattern_equivalence() {
+        asupersync::test_utils::run_test(|| async {
+            let harness = TestHarness::new("grep_literal_matches_plain_pattern_equivalence");
+            harness.create_file("sample.txt", b"alpha\nbeta\nalpha gamma\n");
+            let tool = pi::tools::GrepTool::new(harness.temp_dir());
+
+            let base = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "pattern": "alpha" }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+            let literal = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "pattern": "alpha", "literal": true }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let base_text = get_text_content(&base.content);
+            let literal_text = get_text_content(&literal.content);
+            assert_eq!(
+                base_text, literal_text,
+                "literal mode should match regex mode when pattern has no metacharacters"
+            );
+        });
+    }
+
+    #[test]
+    fn test_grep_ignore_case_is_noop_for_lowercase_content() {
+        asupersync::test_utils::run_test(|| async {
+            let harness = TestHarness::new("grep_ignore_case_is_noop_for_lowercase_content");
+            harness.create_file("sample.txt", b"alpha\nbeta\nalpha gamma\n");
+            let tool = pi::tools::GrepTool::new(harness.temp_dir());
+
+            let base = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "pattern": "alpha", "ignoreCase": false }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+            let insensitive = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "pattern": "alpha", "ignoreCase": true }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let base_text = get_text_content(&base.content);
+            let insensitive_text = get_text_content(&insensitive.content);
+            assert_eq!(
+                base_text, insensitive_text,
+                "ignoreCase should not change results when content is already lowercase"
+            );
+        });
+    }
+
+    #[test]
+    fn test_grep_hashline_tags_match_read_output() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let path = temp_dir.path().join("hashline_grep.txt");
+            std::fs::write(&path, "alpha\nneedle line\nomega").unwrap();
+
+            let read_tool = pi::tools::ReadTool::new(temp_dir.path());
+            let read_out = read_tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "path": path.to_string_lossy(), "hashline": true }),
+                    None,
+                )
+                .await
+                .expect("hashline read should succeed");
+            let read_text = get_text_content(&read_out.content);
+            let read_tag = read_text
+                .lines()
+                .find(|line| line.starts_with("2#"))
+                .and_then(|line| line.split_once(':'))
+                .map(|(tag, _)| tag.to_string())
+                .expect("expected hashline tag for line 2");
+
+            let grep_tool = pi::tools::GrepTool::new(temp_dir.path());
+            let grep_out = grep_tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({
+                        "pattern": "needle",
+                        "path": path.to_string_lossy(),
+                        "hashline": true
+                    }),
+                    None,
+                )
+                .await
+                .expect("hashline grep should succeed");
+            let grep_text = get_text_content(&grep_out.content);
+            let mut parts = grep_text.splitn(3, ':');
+            let _file = parts.next().unwrap_or_default();
+            let grep_tag = parts.next().unwrap_or_default().trim().to_string();
+
+            assert_eq!(
+                grep_tag, read_tag,
+                "grep hashline tag should match read hashline tag for the same line"
             );
         });
     }
@@ -832,6 +1371,125 @@ mod find_tool {
             assert!(text.contains("No files found"));
         });
     }
+
+    #[test]
+    fn test_find_default_path_equivalence() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            std::fs::write(temp_dir.path().join("alpha.txt"), "").unwrap();
+            std::fs::write(temp_dir.path().join("beta.txt"), "").unwrap();
+
+            let tool = pi::tools::FindTool::new(temp_dir.path());
+            let base = tool
+                .execute("test-id", serde_json::json!({ "pattern": "*.txt" }), None)
+                .await
+                .expect("should succeed");
+            let explicit = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "pattern": "*.txt", "path": "." }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let mut base_lines = get_text_content(&base.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let mut explicit_lines = get_text_content(&explicit.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            base_lines.sort();
+            explicit_lines.sort();
+            assert_eq!(
+                base_lines, explicit_lines,
+                "find results should match when path is omitted vs explicit '.'"
+            );
+        });
+    }
+
+    #[test]
+    fn test_find_trailing_slash_equivalence() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let subdir = temp_dir.path().join("subdir");
+            std::fs::create_dir(&subdir).unwrap();
+            std::fs::write(subdir.join("alpha.txt"), "").unwrap();
+            std::fs::create_dir(subdir.join("nested")).unwrap();
+            std::fs::write(subdir.join("nested/beta.txt"), "").unwrap();
+
+            let tool = pi::tools::FindTool::new(temp_dir.path());
+            let base = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "pattern": "**/*.txt", "path": "subdir" }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+            let explicit = tool
+                .execute(
+                    "test-id",
+                    serde_json::json!({ "pattern": "**/*.txt", "path": "subdir/" }),
+                    None,
+                )
+                .await
+                .expect("should succeed");
+
+            let mut base_lines = get_text_content(&base.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let mut explicit_lines = get_text_content(&explicit.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            base_lines.sort();
+            explicit_lines.sort();
+            assert_eq!(
+                base_lines, explicit_lines,
+                "find results should match for 'subdir' vs 'subdir/'"
+            );
+        });
+    }
+
+    #[test]
+    fn test_find_nonmatching_files_do_not_change_results() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            std::fs::write(temp_dir.path().join("match.rs"), "").unwrap();
+            let tool = pi::tools::FindTool::new(temp_dir.path());
+
+            let base = tool
+                .execute("test-id", serde_json::json!({ "pattern": "*.rs" }), None)
+                .await
+                .expect("should succeed");
+
+            std::fs::write(temp_dir.path().join("note.txt"), "").unwrap();
+
+            let after = tool
+                .execute("test-id", serde_json::json!({ "pattern": "*.rs" }), None)
+                .await
+                .expect("should succeed");
+
+            let mut base_lines = get_text_content(&base.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let mut after_lines = get_text_content(&after.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            base_lines.sort();
+            after_lines.sort();
+            assert_eq!(
+                base_lines, after_lines,
+                "non-matching files should not affect find results"
+            );
+        });
+    }
 }
 
 mod ls_tool {
@@ -856,6 +1514,76 @@ mod ls_tool {
             assert!(text.contains("file.txt"));
             assert!(text.contains("subdir/"));
             // Details are only present when limits/truncation occur
+        });
+    }
+
+    #[test]
+    fn test_ls_default_path_equivalence() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            std::fs::write(temp_dir.path().join("alpha.txt"), "content").unwrap();
+            std::fs::create_dir(temp_dir.path().join("beta")).unwrap();
+
+            let tool = pi::tools::LsTool::new(temp_dir.path());
+            let base = tool
+                .execute("test-id", serde_json::json!({}), None)
+                .await
+                .expect("should succeed");
+            let explicit = tool
+                .execute("test-id", serde_json::json!({ "path": "." }), None)
+                .await
+                .expect("should succeed");
+
+            let mut base_lines = get_text_content(&base.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let mut explicit_lines = get_text_content(&explicit.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            base_lines.sort();
+            explicit_lines.sort();
+            assert_eq!(
+                base_lines, explicit_lines,
+                "ls results should match when path is omitted vs explicit '.'"
+            );
+        });
+    }
+
+    #[test]
+    fn test_ls_trailing_slash_equivalence() {
+        asupersync::test_utils::run_test(|| async {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let subdir = temp_dir.path().join("subdir");
+            std::fs::create_dir(&subdir).unwrap();
+            std::fs::write(subdir.join("alpha.txt"), "content").unwrap();
+            std::fs::create_dir(subdir.join("nested")).unwrap();
+
+            let tool = pi::tools::LsTool::new(temp_dir.path());
+            let base = tool
+                .execute("test-id", serde_json::json!({ "path": "subdir" }), None)
+                .await
+                .expect("should succeed");
+            let explicit = tool
+                .execute("test-id", serde_json::json!({ "path": "subdir/" }), None)
+                .await
+                .expect("should succeed");
+
+            let mut base_lines = get_text_content(&base.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let mut explicit_lines = get_text_content(&explicit.content)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            base_lines.sort();
+            explicit_lines.sort();
+            assert_eq!(
+                base_lines, explicit_lines,
+                "ls results should match for 'subdir' vs 'subdir/'"
+            );
         });
     }
 
@@ -1033,6 +1761,20 @@ fn get_text_content(content: &[pi::model::ContentBlock]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn format_size(bytes: usize) -> String {
+    const KB: usize = 1024;
+    const MB: usize = 1024 * 1024;
+
+    if bytes >= MB {
+        format!("{:.1}MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1}KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes}B")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2417,7 +3159,7 @@ fn e2e_all_tools_roundtrip() {
 mod security_path_traversal {
     use super::*;
 
-    /// Read tool follows parent-directory traversal (`../`) – by design.
+    /// Read tool rejects parent-directory traversal (`../`).
     #[test]
     fn read_parent_dir_traversal() {
         asupersync::test_utils::run_test(|| async {
@@ -2431,17 +3173,45 @@ mod security_path_traversal {
             let input = serde_json::json!({
                 "path": "../secret.txt"
             });
-            let result = tool.execute("sec-read-01", input, None).await;
-            let output = result.expect("read with ../ should succeed (by design)");
-            let text = get_text_content(&output.content);
+            let err = tool
+                .execute("sec-read-01", input, None)
+                .await
+                .expect_err("read with ../ should be rejected");
+            let text = err.to_string();
             assert!(
-                text.contains("TOP_SECRET_DATA"),
-                "parent traversal should reach file: {text}"
+                text.contains("Cannot read outside the working directory"),
+                "expected outside-cwd rejection: {text}"
             );
         });
     }
 
-    /// Write tool creates files outside CWD via `../` – by design.
+    /// Read tool rejects dot-dot escape even when path variants match on disk.
+    #[test]
+    fn read_path_variant_outside_cwd_is_rejected() {
+        asupersync::test_utils::run_test(|| async {
+            let parent = tempfile::tempdir().unwrap();
+            let child_dir = parent.path().join("child");
+            std::fs::create_dir_all(&child_dir).unwrap();
+            let secret = parent.path().join("secret.txt");
+            std::fs::write(&secret, "SECRET").unwrap();
+
+            let tool = pi::tools::ReadTool::new(&child_dir);
+            let input = serde_json::json!({
+                "path": "subdir/../secret.txt"
+            });
+            let err = tool
+                .execute("sec-read-04", input, None)
+                .await
+                .expect_err("dot-dot escape should be rejected");
+            let text = err.to_string();
+            assert!(
+                text.contains("Cannot read outside the working directory"),
+                "expected outside-cwd rejection: {text}"
+            );
+        });
+    }
+
+    /// Write tool rejects parent-directory traversal (`../`).
     #[test]
     fn write_parent_dir_traversal() {
         asupersync::test_utils::run_test(|| async {
@@ -2455,15 +3225,53 @@ mod security_path_traversal {
                 "path": escaped_path.to_string_lossy(),
                 "content": "ESCAPED_CONTENT"
             });
-            let result = tool.execute("sec-write-01", input, None).await;
-            result.expect("write with ../ should succeed (by design)");
-
-            let written = std::fs::read_to_string(parent.path().join("escaped.txt")).unwrap();
-            assert_eq!(written, "ESCAPED_CONTENT");
+            let err = tool
+                .execute("sec-write-01", input, None)
+                .await
+                .expect_err("write with ../ should be rejected");
+            let text = err.to_string();
+            assert!(
+                text.contains("Cannot write outside the working directory"),
+                "expected outside-cwd rejection: {text}"
+            );
+            assert!(
+                !parent.path().join("escaped.txt").exists(),
+                "write should not escape cwd"
+            );
         });
     }
 
-    /// Edit tool operates on files outside CWD via `../` – by design.
+    /// Write tool rejects dot-dot escape paths that resolve outside CWD.
+    #[test]
+    fn write_path_variant_outside_cwd_is_rejected() {
+        asupersync::test_utils::run_test(|| async {
+            let parent = tempfile::tempdir().unwrap();
+            let child_dir = parent.path().join("child");
+            std::fs::create_dir_all(&child_dir).unwrap();
+
+            let tool = pi::tools::WriteTool::new(&child_dir);
+            let escaped_path = child_dir.join("subdir/../escaped.txt");
+            let input = serde_json::json!({
+                "path": escaped_path.to_string_lossy(),
+                "content": "ESCAPED_CONTENT"
+            });
+            let err = tool
+                .execute("sec-write-03", input, None)
+                .await
+                .expect_err("dot-dot escape should be rejected");
+            let text = err.to_string();
+            assert!(
+                text.contains("Cannot write outside the working directory"),
+                "expected outside-cwd rejection: {text}"
+            );
+            assert!(
+                !parent.path().join("escaped.txt").exists(),
+                "write should not escape cwd"
+            );
+        });
+    }
+
+    /// Edit tool rejects parent-directory traversal (`../`).
     #[test]
     fn edit_parent_dir_traversal() {
         asupersync::test_utils::run_test(|| async {
@@ -2480,15 +3288,52 @@ mod security_path_traversal {
                 "oldText": "ORIGINAL_CONTENT",
                 "newText": "MODIFIED_CONTENT"
             });
-            let result = tool.execute("sec-edit-01", input, None).await;
-            result.expect("edit with ../ should succeed (by design)");
-
+            let err = tool
+                .execute("sec-edit-01", input, None)
+                .await
+                .expect_err("edit with ../ should be rejected");
+            let text = err.to_string();
+            assert!(
+                text.contains("Cannot edit outside the working directory"),
+                "expected outside-cwd rejection: {text}"
+            );
             let content = std::fs::read_to_string(&target).unwrap();
-            assert_eq!(content, "MODIFIED_CONTENT");
+            assert_eq!(content, "ORIGINAL_CONTENT");
         });
     }
 
-    /// Read tool allows absolute paths outside CWD – by design.
+    /// Edit tool rejects dot-dot escape paths that resolve outside CWD.
+    #[test]
+    fn edit_path_variant_outside_cwd_is_rejected() {
+        asupersync::test_utils::run_test(|| async {
+            let parent = tempfile::tempdir().unwrap();
+            let child_dir = parent.path().join("child");
+            std::fs::create_dir_all(&child_dir).unwrap();
+            let target = parent.path().join("target.txt");
+            std::fs::write(&target, "ORIGINAL_CONTENT").unwrap();
+
+            let tool = pi::tools::EditTool::new(&child_dir);
+            let escaped_path = child_dir.join("subdir/../target.txt");
+            let input = serde_json::json!({
+                "path": escaped_path.to_string_lossy(),
+                "oldText": "ORIGINAL_CONTENT",
+                "newText": "MODIFIED_CONTENT"
+            });
+            let err = tool
+                .execute("sec-edit-02", input, None)
+                .await
+                .expect_err("dot-dot escape should be rejected");
+            let text = err.to_string();
+            assert!(
+                text.contains("Cannot edit outside the working directory"),
+                "expected outside-cwd rejection: {text}"
+            );
+            let content = std::fs::read_to_string(&target).unwrap();
+            assert_eq!(content, "ORIGINAL_CONTENT");
+        });
+    }
+
+    /// Read tool rejects absolute paths outside CWD.
     #[test]
     fn read_absolute_path_outside_cwd() {
         asupersync::test_utils::run_test(|| async {
@@ -2501,14 +3346,74 @@ mod security_path_traversal {
             let input = serde_json::json!({
                 "path": outside_file.to_string_lossy()
             });
-            let result = tool.execute("sec-read-02", input, None).await;
-            let output = result.expect("absolute path outside CWD should work");
-            let text = get_text_content(&output.content);
-            assert!(text.contains("OUTSIDE_DATA"));
+            let err = tool
+                .execute("sec-read-02", input, None)
+                .await
+                .expect_err("absolute path outside CWD should be rejected");
+            let text = err.to_string();
+            assert!(text.contains("Cannot read outside the working directory"));
         });
     }
 
-    /// Read tool follows symlinks that point outside CWD – by design.
+    /// Write tool rejects absolute paths outside CWD.
+    #[test]
+    fn write_absolute_path_outside_cwd() {
+        asupersync::test_utils::run_test(|| async {
+            let outside = tempfile::tempdir().unwrap();
+            let outside_file = outside.path().join("outside.txt");
+
+            let cwd = tempfile::tempdir().unwrap();
+            let tool = pi::tools::WriteTool::new(cwd.path());
+            let input = serde_json::json!({
+                "path": outside_file.to_string_lossy(),
+                "content": "NOPE"
+            });
+            let err = tool
+                .execute("sec-write-04", input, None)
+                .await
+                .expect_err("absolute path outside CWD should be rejected");
+            let text = err.to_string();
+            assert!(
+                text.contains("Cannot write outside the working directory"),
+                "expected outside-cwd rejection: {text}"
+            );
+            assert!(
+                !outside_file.exists(),
+                "write should not touch outside path"
+            );
+        });
+    }
+
+    /// Edit tool rejects absolute paths outside CWD.
+    #[test]
+    fn edit_absolute_path_outside_cwd() {
+        asupersync::test_utils::run_test(|| async {
+            let outside = tempfile::tempdir().unwrap();
+            let outside_file = outside.path().join("outside.txt");
+            std::fs::write(&outside_file, "ORIGINAL").unwrap();
+
+            let cwd = tempfile::tempdir().unwrap();
+            let tool = pi::tools::EditTool::new(cwd.path());
+            let input = serde_json::json!({
+                "path": outside_file.to_string_lossy(),
+                "oldText": "ORIGINAL",
+                "newText": "MODIFIED"
+            });
+            let err = tool
+                .execute("sec-edit-03", input, None)
+                .await
+                .expect_err("absolute path outside CWD should be rejected");
+            let text = err.to_string();
+            assert!(
+                text.contains("Cannot edit outside the working directory"),
+                "expected outside-cwd rejection: {text}"
+            );
+            let content = std::fs::read_to_string(&outside_file).unwrap();
+            assert_eq!(content, "ORIGINAL");
+        });
+    }
+
+    /// Read tool rejects symlinks that resolve outside CWD.
     #[test]
     #[cfg(unix)]
     fn read_symlink_escape() {
@@ -2525,15 +3430,19 @@ mod security_path_traversal {
             let input = serde_json::json!({
                 "path": link.to_string_lossy()
             });
-            let result = tool.execute("sec-read-03", input, None).await;
-            let output = result.expect("symlink escape should succeed (by design)");
-            let text = get_text_content(&output.content);
-            assert!(text.contains("SYMLINK_SECRET"));
+            let err = tool
+                .execute("sec-read-03", input, None)
+                .await
+                .expect_err("symlink escape should be rejected");
+            let text = err.to_string();
+            assert!(
+                text.contains("Cannot read outside the working directory"),
+                "expected outside-cwd rejection: {text}"
+            );
         });
     }
 
-    /// Write tool replaces symlinks with regular files (atomic rename).
-    /// This prevents symlink-following attacks: the original target is untouched.
+    /// Write tool rejects symlinks that resolve outside CWD.
     #[test]
     #[cfg(unix)]
     fn write_replaces_symlink_with_regular_file() {
@@ -2551,23 +3460,67 @@ mod security_path_traversal {
                 "path": link.to_string_lossy(),
                 "content": "NEW_CONTENT"
             });
-            let result = tool.execute("sec-write-02", input, None).await;
-            result.expect("write at symlink path should succeed");
-
-            // Atomic rename replaces the symlink with a regular file
+            let err = tool
+                .execute("sec-write-02", input, None)
+                .await
+                .expect_err("write at symlink path should be rejected");
+            let text = err.to_string();
             assert!(
-                !link.symlink_metadata().unwrap().file_type().is_symlink(),
-                "symlink should be replaced by a regular file"
+                text.contains("Cannot write outside the working directory"),
+                "expected outside-cwd rejection: {text}"
             );
-            let link_content = std::fs::read_to_string(&link).unwrap();
-            assert_eq!(link_content, "NEW_CONTENT");
-
-            // Original target is untouched (safe against symlink attacks)
+            assert!(
+                link.symlink_metadata().unwrap().file_type().is_symlink(),
+                "symlink should remain intact"
+            );
             let target_content = std::fs::read_to_string(&target).unwrap();
-            assert_eq!(
-                target_content, "ORIGINAL",
-                "original symlink target should be untouched"
-            );
+            assert_eq!(target_content, "ORIGINAL");
+        });
+    }
+
+    /// Write tool allows symlinks that resolve inside CWD.
+    #[test]
+    #[cfg(unix)]
+    fn write_symlink_within_cwd_allowed() {
+        asupersync::test_utils::run_test(|| async {
+            let cwd = tempfile::tempdir().unwrap();
+            let target = cwd.path().join("target.txt");
+            std::fs::write(&target, "ORIGINAL").unwrap();
+            let link = cwd.path().join("link.txt");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+
+            let tool = pi::tools::WriteTool::new(cwd.path());
+            let input = serde_json::json!({
+                "path": link.to_string_lossy(),
+                "content": "NEW_CONTENT"
+            });
+            let result = tool.execute("sec-write-05", input, None).await;
+            result.expect("write at symlink inside cwd should succeed");
+
+            let target_content = std::fs::read_to_string(&target).unwrap();
+            assert_eq!(target_content, "NEW_CONTENT");
+        });
+    }
+
+    /// Read tool allows symlinks that resolve inside CWD.
+    #[test]
+    #[cfg(unix)]
+    fn read_symlink_within_cwd_allowed() {
+        asupersync::test_utils::run_test(|| async {
+            let cwd = tempfile::tempdir().unwrap();
+            let target = cwd.path().join("target.txt");
+            std::fs::write(&target, "INSIDE_SECRET").unwrap();
+            let link = cwd.path().join("link.txt");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+
+            let tool = pi::tools::ReadTool::new(cwd.path());
+            let input = serde_json::json!({
+                "path": link.to_string_lossy()
+            });
+            let result = tool.execute("sec-read-05", input, None).await;
+            let output = result.expect("read at symlink inside cwd should succeed");
+            let text = get_text_content(&output.content);
+            assert!(text.contains("INSIDE_SECRET"));
         });
     }
 }
@@ -2724,6 +3677,42 @@ mod security_environment {
             let output = result.expect("HOME should be accessible");
             let text = get_text_content(&output.content);
             assert!(!text.trim().is_empty(), "HOME should be non-empty: {text}");
+        });
+    }
+
+    /// Bash tool inherits the current locale variables when set.
+    #[test]
+    fn bash_locale_inheritance() {
+        asupersync::test_utils::run_test(|| async {
+            let cwd = tempfile::tempdir().unwrap();
+            let candidate_keys = ["LC_ALL", "LC_CTYPE", "LANG"];
+            let mut selected = None;
+            for key in candidate_keys {
+                if let Ok(value) = std::env::var(key) {
+                    if !value.trim().is_empty() {
+                        selected = Some((key, value));
+                        break;
+                    }
+                }
+            }
+
+            let Some((key, expected)) = selected else {
+                // If no locale vars are set in the environment, skip this test rather than
+                // mutating the process environment (set_var is unsafe in Rust 2024).
+                return;
+            };
+
+            let tool = pi::tools::BashTool::new(cwd.path());
+            let input = serde_json::json!({
+                "command": format!("echo ${key}")
+            });
+            let result = tool.execute("sec-env-04", input, None).await;
+            let output = result.expect("LC_ALL should be accessible");
+            let text = get_text_content(&output.content);
+            assert!(
+                text.to_lowercase().contains(&expected.to_lowercase()),
+                "{key} should be inherited: actual={text}, expected={expected}"
+            );
         });
     }
 }

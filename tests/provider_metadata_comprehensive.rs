@@ -627,7 +627,7 @@ fn generate_canonical_id_alias_table_json() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn canonical_id_snapshot_detects_additions_and_removals() {
-    // ── Snapshot: 87 canonical IDs (sorted) ─────────────────────────────
+    // ── Snapshot: 88 canonical IDs (sorted) ─────────────────────────────
     // To update: run the failing test, copy the "actual" list printed
     // below, and replace this array.
     const EXPECTED: &[&str] = &[
@@ -636,6 +636,7 @@ fn canonical_id_snapshot_detects_additions_and_removals() {
         "aihubmix",
         "alibaba",
         "alibaba-cn",
+        "alibaba-us",
         "amazon-bedrock",
         "anthropic",
         "azure-openai",
@@ -821,6 +822,10 @@ fn base_url_snapshot_for_key_providers() {
             "alibaba-cn",
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
         ),
+        (
+            "alibaba-us",
+            "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+        ),
         ("anthropic", "https://api.anthropic.com/v1/messages"),
         ("cerebras", "https://api.cerebras.ai/v1"),
         ("deepinfra", "https://api.deepinfra.com/v1/openai"),
@@ -913,6 +918,7 @@ fn gap_providers_have_setup_documentation() {
         ("groq", "docs/provider-groq-setup.json"),
         ("moonshotai", "docs/provider-kimi-setup.json"),
         ("alibaba", "docs/provider-qwen-setup.json"),
+        ("alibaba-us", "docs/provider-qwen-setup.json"),
         ("openrouter", "docs/provider-openrouter-setup.json"),
     ];
 

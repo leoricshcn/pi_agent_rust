@@ -155,11 +155,17 @@ const WAVE_A_PRESET_CASES: [(&str, &str); 13] = [
     ("fireworks-ai", "https://api.fireworks.ai/inference/v1"),
 ];
 
-const WAVE_B1_PRESET_CASES: [(&str, &str, &str, bool); 6] = [
+const WAVE_B1_PRESET_CASES: [(&str, &str, &str, bool); 7] = [
     (
         "alibaba-cn",
         "openai-completions",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        true,
+    ),
+    (
+        "alibaba-us",
+        "openai-completions",
+        "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
         true,
     ),
     (
@@ -1543,6 +1549,12 @@ fn wave_b1_family_coherence_with_existing_moonshot_and_alibaba_mappings() {
                     .unwrap_or("missing")
                     .to_string(),
             ));
+            ctx.push((
+                "alibaba_us".to_string(),
+                canonical_provider_id("alibaba-us")
+                    .unwrap_or("missing")
+                    .to_string(),
+            ));
         });
     assert_eq!(canonical_provider_id("kimi"), Some("moonshotai"));
     assert_eq!(
@@ -1551,15 +1563,23 @@ fn wave_b1_family_coherence_with_existing_moonshot_and_alibaba_mappings() {
     );
     assert_eq!(canonical_provider_id("alibaba"), Some("alibaba"));
     assert_eq!(canonical_provider_id("alibaba-cn"), Some("alibaba-cn"));
+    assert_eq!(canonical_provider_id("alibaba-us"), Some("alibaba-us"));
 
     let alibaba = provider_routing_defaults("alibaba").expect("alibaba defaults");
     let alibaba_cn = provider_routing_defaults("alibaba-cn").expect("alibaba-cn defaults");
+    let alibaba_us = provider_routing_defaults("alibaba-us").expect("alibaba-us defaults");
     assert_eq!(
         provider_auth_env_keys("alibaba"),
         &["DASHSCOPE_API_KEY", "QWEN_API_KEY"]
     );
     assert_eq!(provider_auth_env_keys("alibaba-cn"), &["DASHSCOPE_API_KEY"]);
+    assert_eq!(
+        provider_auth_env_keys("alibaba-us"),
+        &["DASHSCOPE_API_KEY", "QWEN_API_KEY"]
+    );
     assert_ne!(alibaba.base_url, alibaba_cn.base_url);
+    assert_ne!(alibaba.base_url, alibaba_us.base_url);
+    assert_ne!(alibaba_cn.base_url, alibaba_us.base_url);
 }
 
 #[test]

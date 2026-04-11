@@ -7,6 +7,7 @@
       "name": "head_no_truncation",
       "description": "Content within limits should not be truncated",
       "input": {
+        "direction": "head",
         "content": "line1\nline2\nline3",
         "max_lines": 10,
         "max_bytes": 1000
@@ -24,6 +25,7 @@
       "name": "head_truncate_by_lines",
       "description": "Truncate from head when exceeding line limit",
       "input": {
+        "direction": "head",
         "content": "line1\nline2\nline3\nline4\nline5",
         "max_lines": 3,
         "max_bytes": 10000
@@ -42,6 +44,7 @@
       "name": "head_truncate_by_bytes",
       "description": "Truncate from head when exceeding byte limit",
       "input": {
+        "direction": "head",
         "content": "short\nthis is a much longer line\nanother line here",
         "max_lines": 100,
         "max_bytes": 20
@@ -56,8 +59,9 @@
     },
     {
       "name": "head_first_line_exceeds_bytes",
-      "description": "When first line alone exceeds byte limit, return empty",
+      "description": "When first line alone exceeds byte limit, return a truncated first line",
       "input": {
+        "direction": "head",
         "content": "this is a very long first line that exceeds the limit",
         "max_lines": 100,
         "max_bytes": 10
@@ -77,6 +81,7 @@
       "name": "tail_no_truncation",
       "description": "Content within limits should not be truncated",
       "input": {
+        "direction": "tail",
         "content": "line1\nline2\nline3",
         "max_lines": 10,
         "max_bytes": 1000
@@ -94,6 +99,7 @@
       "name": "tail_truncate_by_lines",
       "description": "Truncate from tail keeps last N lines",
       "input": {
+        "direction": "tail",
         "content": "line1\nline2\nline3\nline4\nline5",
         "max_lines": 3,
         "max_bytes": 10000
@@ -109,9 +115,32 @@
       }
     },
     {
+      "name": "tail_truncate_by_bytes",
+      "description": "Truncate from tail when exceeding byte limit",
+      "input": {
+        "direction": "tail",
+        "content": "abcdefghij",
+        "max_lines": 10,
+        "max_bytes": 4
+      },
+      "expected": {
+        "content_exact": "ghij",
+        "details_exact": {
+          "truncated": true,
+          "truncated_by": "bytes",
+          "last_line_partial": true,
+          "output_lines": 1,
+          "output_bytes": 4,
+          "total_lines": 1,
+          "total_bytes": 10
+        }
+      }
+    },
+    {
       "name": "empty_content",
       "description": "Empty content should return empty without truncation",
       "input": {
+        "direction": "head",
         "content": "",
         "max_lines": 100,
         "max_bytes": 10000
@@ -129,6 +158,7 @@
       "name": "single_line",
       "description": "Single line within limits",
       "input": {
+        "direction": "head",
         "content": "single line content",
         "max_lines": 100,
         "max_bytes": 10000
@@ -146,6 +176,7 @@
       "name": "unicode_content",
       "description": "Unicode content should be handled correctly",
       "input": {
+        "direction": "head",
         "content": "Hello 世界\nこんにちは\n🎉🎊",
         "max_lines": 100,
         "max_bytes": 10000

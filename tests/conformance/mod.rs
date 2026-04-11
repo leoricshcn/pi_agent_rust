@@ -120,6 +120,9 @@ pub struct Expected {
     /// Details values that must match exactly
     #[serde(default)]
     pub details_exact: HashMap<String, serde_json::Value>,
+    /// Details must contain these substrings (typically within diff output)
+    #[serde(default)]
+    pub details_contains: Vec<String>,
     /// Details must exactly match the committed golden JSON file.
     #[serde(default)]
     pub details_golden: Option<String>,
@@ -247,6 +250,7 @@ pub fn validate_expected(
         }
         if !expected.details.is_empty()
             || !expected.details_exact.is_empty()
+            || !expected.details_contains.is_empty()
             || expected.details_golden.is_some()
         {
             return Err(
@@ -296,7 +300,20 @@ pub fn validate_expected(
                 }
             }
         }
-    } else if !expected.details.is_empty() || !expected.details_exact.is_empty() {
+        if !expected.details_contains.is_empty() {
+            let details_text = serde_json::to_string_pretty(actual_details).unwrap_or_default();
+            for substring in &expected.details_contains {
+                if !details_text.contains(substring) {
+                    return Err(format!(
+                        "Details missing expected substring: '{substring}'\nActual details:\n{details_text}"
+                    ));
+                }
+            }
+        }
+    } else if !expected.details.is_empty()
+        || !expected.details_exact.is_empty()
+        || !expected.details_contains.is_empty()
+    {
         return Err("Expected details but tool returned None".to_string());
     }
 
@@ -540,6 +557,25 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_details_contains_diff() {
+        let expected = Expected {
+            details_contains: vec!["-1 Hello".to_string(), "+1 Hi".to_string()],
+            ..Default::default()
+        };
+
+        let details = serde_json::json!({
+            "diff": "-1 Hello\n+1 Hi",
+            "firstChangedLine": 1
+        });
+        assert!(validate_expected(&expected, "", Some(&details)).is_ok());
+
+        let wrong_details = serde_json::json!({
+            "diff": "+1 Hi"
+        });
+        assert!(validate_expected(&expected, "", Some(&wrong_details)).is_err());
+    }
+
+    #[test]
     fn test_display_name_includes_requirement_ids() {
         let case = TestCase {
             name: "defaults".to_string(),
@@ -578,6 +614,11 @@ mod tests {
             ..Default::default()
         };
         let details = serde_json::json!({
+            "tools": "read,bash,edit,write,grep,find,ls,hashline_edit",
+            "extension": [],
+            "theme_path": [],
+            "prompt_template": [],
+            "skill": [],
             "message_args": [],
             "file_args": [],
             "command": null,
@@ -586,19 +627,14 @@ mod tests {
             "export": null,
             "hide_cwd_in_prompt": false,
             "no_themes": false,
-            "theme_path": null,
             "theme": null,
             "no_prompt_templates": false,
-            "prompt_template": null,
             "no_skills": false,
-            "skill": null,
             "explain_repair_policy": false,
             "repair_policy": null,
             "explain_extension_policy": false,
             "extension_policy": null,
             "no_extensions": false,
-            "extension": null,
-            "tools": null,
             "no_tools": false,
             "verbose": false,
             "acp": false,
@@ -660,6 +696,42 @@ mod tests {
         let err =
             validate_expected_with_goldens(&expected, "", None).expect_err("must reject escape");
         assert!(err.contains("must not escape"));
+    }
+
+    #[test]
+    fn test_canonicalize_json_is_idempotent() {
+        let sample = serde_json::json!({
+            "b": 2,
+            "a": {
+                "d": [
+                    {"z": 1, "y": 2},
+                    3
+                ],
+                "c": "x"
+            },
+            "arr": [
+                {"k": "v", "j": 1},
+                ["nested", {"b": true, "a": false}]
+            ]
+        });
+
+        let once = canonicalize_json(&sample);
+        let twice = canonicalize_json(&once);
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn test_canonicalize_json_ignores_object_key_order() {
+        let left = serde_json::json!({
+            "b": 1,
+            "a": 2
+        });
+        let right = serde_json::json!({
+            "a": 2,
+            "b": 1
+        });
+
+        assert_eq!(canonicalize_json(&left), canonicalize_json(&right));
     }
 
     proptest! {

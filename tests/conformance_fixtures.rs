@@ -60,6 +60,7 @@ fixture_test!(test_grep_fixtures, "grep_tool");
 fixture_test!(test_write_fixtures, "write_tool");
 fixture_test!(test_find_fixtures, "find_tool");
 fixture_test!(test_ls_fixtures, "ls_tool");
+fixture_test!(test_hashline_edit_fixtures, "hashline_edit_tool");
 fixture_test!(test_cli_flag_fixtures, "cli_flags");
 
 /// Run truncation tests from fixtures.
@@ -103,6 +104,7 @@ fn test_all_fixtures_exist() {
         "write_tool",
         "find_tool",
         "ls_tool",
+        "hashline_edit_tool",
         "truncation",
         "cli_flags",
     ];

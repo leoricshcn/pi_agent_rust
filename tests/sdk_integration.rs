@@ -185,6 +185,7 @@ fn run_scripted(
                 ..StreamOptions::default()
             },
             block_images: false,
+            fail_closed_hooks: false,
         };
         let agent = pi::agent::Agent::new(provider, tools, config);
         let session = Arc::new(asupersync::sync::Mutex::new(Session::create_with_dir(
@@ -1046,6 +1047,7 @@ fn sdk_conformance_session_tool_hooks() {
                 ..StreamOptions::default()
             },
             block_images: false,
+            fail_closed_hooks: false,
         };
         let agent = pi::agent::Agent::new(provider, tools, config);
         let session = Arc::new(asupersync::sync::Mutex::new(Session::create_with_dir(
@@ -1128,6 +1130,7 @@ fn sdk_conformance_combined_callback_ordering() {
                 ..StreamOptions::default()
             },
             block_images: false,
+            fail_closed_hooks: false,
         };
         let agent = pi::agent::Agent::new(provider, tools, config);
         let session = Arc::new(asupersync::sync::Mutex::new(Session::create_with_dir(
@@ -1237,6 +1240,7 @@ fn sdk_continue_turn_uses_combined_listener_path() {
                 ..StreamOptions::default()
             },
             block_images: false,
+            fail_closed_hooks: false,
         };
         let agent = pi::agent::Agent::new(provider, tools, config);
         let session = Arc::new(asupersync::sync::Mutex::new(Session::create_with_dir(
@@ -1323,6 +1327,7 @@ fn sdk_continue_turn_with_abort_returns_aborted_message() {
                 ..StreamOptions::default()
             },
             block_images: false,
+            fail_closed_hooks: false,
         };
         let agent = pi::agent::Agent::new(provider, tools, config);
         let session = Arc::new(asupersync::sync::Mutex::new(Session::create_with_dir(

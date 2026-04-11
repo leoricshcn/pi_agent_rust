@@ -203,6 +203,113 @@ fn os_platform_matches_process_platform() {
 }
 
 #[test]
+fn assert_strict_imports() {
+    let result = eval_multi(
+        r#"import assert from "node:assert/strict";"#,
+        r#"(() => {
+        try {
+            assert.strictEqual(1, 1);
+            assert.notDeepEqual({a: 1}, {a: 2});
+            return true;
+        } catch (e) {
+            return `ERROR:${e.message}`;
+        }
+    })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn timers_module_exports_globals() {
+    let result = eval_multi(
+        r#"import * as timers from "node:timers";"#,
+        r#"(() => {
+        return (
+            typeof timers.setTimeout === "function" &&
+            typeof timers.clearTimeout === "function" &&
+            typeof timers.setInterval === "function" &&
+            typeof timers.clearInterval === "function" &&
+            typeof timers.queueMicrotask === "function" &&
+            typeof timers.setImmediate === "function" &&
+            typeof timers.clearImmediate === "function"
+        );
+    })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn timers_module_alias_resolves() {
+    let result = eval_multi(
+        r#"import * as timers from "timers";"#,
+        r#"(() => {
+        return (
+            typeof timers.setTimeout === "function" &&
+            typeof timers.clearTimeout === "function" &&
+            typeof timers.setInterval === "function" &&
+            typeof timers.clearInterval === "function"
+        );
+    })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn assert_strict_bare_imports() {
+    let result = eval_multi(
+        r#"import assert from "assert/strict";"#,
+        r#"(() => {
+        try {
+            assert.strictEqual(1, 1);
+            assert.notDeepEqual({a: 1}, {a: 2});
+            return true;
+        } catch (e) {
+            return `ERROR:${e.message}`;
+        }
+    })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn node_test_imports() {
+    let result = eval_multi(
+        r#"import test, { test as namedTest, describe, it } from "node:test";"#,
+        r#"(() => {
+        return typeof namedTest === 'function'
+            && typeof test.test === 'function'
+            && typeof describe === 'function'
+            && typeof it === 'function';
+    })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn readline_promises_imports() {
+    let result = eval_multi(
+        r#"import { createInterface } from "node:readline/promises";"#,
+        r#"(() => {
+        const rl = createInterface({});
+        return typeof rl.question === 'function' && typeof rl.close === 'function';
+    })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn readline_promises_bare_imports() {
+    let result = eval_multi(
+        r#"import { createInterface } from "readline/promises";"#,
+        r#"(() => {
+        const rl = createInterface({});
+        return typeof rl.question === 'function' && typeof rl.close === 'function';
+    })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
 fn path_resolve_uses_process_cwd() {
     let result = eval_multi(
         r#"import path from "node:path";"#,

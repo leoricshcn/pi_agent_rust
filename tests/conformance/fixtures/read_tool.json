@@ -40,6 +40,42 @@
       }
     },
     {
+      "name": "read_with_limit_golden",
+      "description": "Read limit output matches golden snapshot",
+      "setup": [
+        {"type": "create_file", "path": "test.txt", "content": "line1\nline2\nline3\nline4"}
+      ],
+      "input": {"path": "test.txt", "limit": 2},
+      "expected": {
+        "content_golden": "read_tool/limit_notice.txt",
+        "details_none": true
+      }
+    },
+    {
+      "name": "read_with_limit_golden_crlf",
+      "description": "CRLF input normalizes to the same golden limit output",
+      "setup": [
+        {"type": "create_file", "path": "test.txt", "content": "line1\r\nline2\r\nline3\r\nline4"}
+      ],
+      "input": {"path": "test.txt", "limit": 2},
+      "expected": {
+        "content_golden": "read_tool/limit_notice.txt",
+        "details_none": true
+      }
+    },
+    {
+      "name": "read_with_limit_golden_cr",
+      "description": "CR-only input normalizes to the same golden limit output",
+      "setup": [
+        {"type": "create_file", "path": "test.txt", "content": "line1\rline2\rline3\rline4"}
+      ],
+      "input": {"path": "test.txt", "limit": 2},
+      "expected": {
+        "content_golden": "read_tool/limit_notice.txt",
+        "details_none": true
+      }
+    },
+    {
       "name": "read_with_offset_and_limit",
       "description": "Read file with both offset and limit",
       "setup": [
@@ -60,6 +96,14 @@
       "input": {"path": "test.txt", "offset": 999},
       "expect_error": true,
       "error_contains": "Offset 999 is beyond end of file",
+      "expected": {}
+    },
+    {
+      "name": "read_outside_cwd",
+      "description": "Reading outside the working directory should be rejected",
+      "input": {"path": "../outside.txt"},
+      "expect_error": true,
+      "error_contains": "Cannot read outside the working directory",
       "expected": {}
     },
     {
@@ -268,6 +312,30 @@
       "input": {"path": "readme.md"},
       "expected": {
         "content_contains": ["# Title", "bullet", "fn main"],
+        "details_none": true
+      }
+    },
+    {
+      "name": "read_hashline_format",
+      "description": "Hashline mode emits N#AB:content tags",
+      "setup": [
+        {"type": "create_file", "path": "hashline.txt", "content": "alpha\nbeta"}
+      ],
+      "input": {"path": "hashline.txt", "hashline": true},
+      "expected": {
+        "content_regex": "(?s)^\\s*1#[A-Z]{2}:alpha\\n\\s*2#[A-Z]{2}:beta$",
+        "details_none": true
+      }
+    },
+    {
+      "name": "read_hashline_offset_preserves_line_numbers",
+      "description": "Hashline mode preserves original line numbers when offset is used",
+      "setup": [
+        {"type": "create_file", "path": "hashline_offset.txt", "content": "alpha\nbeta\ngamma"}
+      ],
+      "input": {"path": "hashline_offset.txt", "offset": 2, "limit": 1, "hashline": true},
+      "expected": {
+        "content_regex": "^\\s*2#[A-Z]{2}:beta$",
         "details_none": true
       }
     }

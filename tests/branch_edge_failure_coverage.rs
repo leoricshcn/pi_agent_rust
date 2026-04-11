@@ -262,6 +262,22 @@ fn process_file_arguments_empty_file_skipped() {
 }
 
 #[test]
+fn process_file_arguments_rejects_outside_cwd() {
+    let dir = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let outside_file = outside.path().join("secret.txt");
+    std::fs::write(&outside_file, "secret").unwrap();
+    let result = pi::tools::process_file_arguments(
+        &[outside_file.to_string_lossy().to_string()],
+        dir.path(),
+        false,
+    );
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("Cannot read outside the working directory"));
+}
+
+#[test]
 fn process_file_arguments_text_file_wrapped_in_tags() {
     let dir = TempDir::new().unwrap();
     let text_file = dir.path().join("hello.txt");

@@ -1,0 +1,87 @@
+{
+  "schema": "pi.golden_corpus.v1",
+  "scenario": "json_mode_stdin_openai_responses_ndjson",
+  "surface": "json_mode_stdin",
+  "description": "JSON mode with stdin: OpenAI Responses NDJSON stream playback",
+  "cli_args": [
+    "--mode", "json",
+    "--provider", "openai",
+    "--model", "gpt-4o-mini",
+    "--no-tools",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--thinking", "off",
+    "--system-prompt", "JSON stdin test."
+  ],
+  "stdin": "JSON stdin body\n",
+  "env_overrides": {
+    "OPENAI_API_KEY": "test-vcr-key"
+  },
+  "cassette": {
+    "version": "1.0",
+    "test_name": "golden_json_mode_stdin_openai_responses_ndjson",
+    "recorded_at": "2026-04-11T00:00:00.000Z",
+    "interactions": [
+      {
+        "request": {
+          "method": "POST",
+          "url": "https://api.openai.com/v1/responses",
+          "headers": [
+            ["Authorization", "[REDACTED]"],
+            ["Content-Type", "application/json"],
+            ["Accept", "text/event-stream, application/x-ndjson, application/ndjson"]
+          ],
+          "body": {
+            "model": "gpt-4o-mini",
+            "input": [
+              {
+                "role": "user",
+                "content": [
+                  { "type": "input_text", "text": "JSON stdin body" }
+                ]
+              }
+            ],
+            "instructions": "JSON stdin test.\nCurrent date and time: <TIMESTAMP>\nCurrent working directory: <CWD>",
+            "stream": true,
+            "store": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [
+            ["Content-Type", "application/x-ndjson"]
+          ],
+          "body_chunks": [
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_ndjson_stdin_1\",\"content_index\":0,\"delta\":\"stdin \"}\n",
+            "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_ndjson_stdin_1\",\"content_index\":0,\"delta\":\"ok\"}\n",
+            "{\"type\":\"response.completed\",\"response\":{\"incomplete_details\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":2,\"total_tokens\":12}}}\n"
+          ]
+        }
+      }
+    ]
+  },
+  "expected": {
+    "exit_code": 0,
+    "stdout_contains": [],
+    "stdout_not_contains": [],
+    "stderr_not_contains": ["error", "panic"],
+    "no_session_files": true,
+    "json_event_sequence": [
+      "session",
+      "agent_start",
+      "message_start",
+      "message_end",
+      "turn_start",
+      "message_start",
+      "message_update",
+      "message_end",
+      "turn_end",
+      "agent_end"
+    ],
+    "json_session_header": true,
+    "json_agent_start_has_session_id": true,
+    "json_agent_end_has_messages": true
+  }
+}

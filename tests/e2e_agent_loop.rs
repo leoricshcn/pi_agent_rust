@@ -484,6 +484,7 @@ fn run_scenario(
                 ..StreamOptions::default()
             },
             block_images: false,
+            fail_closed_hooks: false,
         };
         let agent = Agent::new(provider, tools, config);
         let session = Arc::new(asupersync::sync::Mutex::new(Session::create_with_dir(

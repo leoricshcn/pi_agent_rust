@@ -55,6 +55,7 @@ async fn run_test_case(tool_name: &str, case: &TestCase) -> TestResult {
         "grep" => Box::new(pi::tools::GrepTool::new(temp_dir.path())),
         "find" => Box::new(pi::tools::FindTool::new(temp_dir.path())),
         "ls" => Box::new(pi::tools::LsTool::new(temp_dir.path())),
+        "hashline_edit" => Box::new(pi::tools::HashlineEditTool::new(temp_dir.path())),
         _ => {
             return TestResult::fail(&case_name, format!("Unknown tool: {tool_name}"));
         }
@@ -399,13 +400,37 @@ fn run_truncation_test_case(case: &TestCase) -> TestResult {
     let case_name = case.display_name();
 
     let content = case.input["content"].as_str().unwrap_or("");
-    let max_lines =
-        usize::try_from(case.input["max_lines"].as_u64().unwrap_or(2000)).unwrap_or(2000);
-    let max_bytes =
-        usize::try_from(case.input["max_bytes"].as_u64().unwrap_or(50000)).unwrap_or(50000);
+    let max_lines = usize::try_from(
+        case.input["max_lines"]
+            .as_u64()
+            .unwrap_or(pi::tools::DEFAULT_MAX_LINES as u64),
+    )
+    .unwrap_or(pi::tools::DEFAULT_MAX_LINES);
+    let max_bytes = usize::try_from(
+        case.input["max_bytes"]
+            .as_u64()
+            .unwrap_or(pi::tools::DEFAULT_MAX_BYTES as u64),
+    )
+    .unwrap_or(pi::tools::DEFAULT_MAX_BYTES);
 
-    // Determine if this is a head or tail test based on the name
-    let result = if case.name.contains("tail") {
+    let direction = case
+        .input
+        .get("direction")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase());
+    let use_tail = match direction.as_deref() {
+        Some("tail") => true,
+        Some("head") => false,
+        Some(other) => {
+            return TestResult::fail(
+                &case_name,
+                format!("Invalid truncation direction '{other}' (expected 'head' or 'tail')"),
+            );
+        }
+        None => case.name.contains("tail"),
+    };
+
+    let result = if use_tail {
         truncate_tail(content, max_lines, max_bytes)
     } else {
         truncate_head(content, max_lines, max_bytes)

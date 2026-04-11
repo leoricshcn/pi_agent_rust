@@ -612,14 +612,7 @@ export default function activate(pi) {
 #[test]
 fn t1_fs_write_outside_workspace() {
     // Attempt to write files outside workspace.
-    //
-    // KNOWN GAP (G-2 in baseline-audit.md): writeFileSync does NOT enforce
-    // workspace confinement the way readFileSync does. The write shim
-    // currently allows writing to any path the process user can access.
-    // This documents the gap for tracking — the test verifies the CURRENT
-    // behavior (write succeeds) and should be updated when G-2 is fixed.
-    //
-    // When G-2 is fixed, change the assertion to expect "BLOCKED:".
+    // writeFileSync must enforce workspace confinement, just like readFileSync.
     let result = eval_adversarial(
         r#"
 import fs from "node:fs";
