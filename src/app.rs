@@ -474,7 +474,7 @@ pub fn select_model_and_thinking(
     }
 
     if selected_model.is_none() {
-        if let Some((provider, model_id)) = last_model_from_session(session) {
+        if let Some((provider, model_id)) = model_from_session_state(session) {
             let restore = restore_model_from_session(&provider, &model_id, None, registry);
             selected_model = restore.model;
             fallback_message = restore.fallback_message;
@@ -587,7 +587,7 @@ pub fn select_model_and_thinking(
     } else if scoped_thinking.is_some() {
         thinking_level = scoped_thinking;
     } else if is_continuing {
-        if let Some(saved) = last_thinking_level(session) {
+        if let Some(saved) = thinking_level_from_session_state(session) {
             thinking_level = Some(saved);
         }
     }
@@ -621,48 +621,52 @@ fn parse_thinking_level_opt(value: &str) -> Option<model::ThinkingLevel> {
 }
 
 fn last_model_from_session(session: &Session) -> Option<(String, String)> {
-    for entry in session.entries.iter().rev() {
-        if let crate::session::SessionEntry::ModelChange(change) = entry {
-            return Some((change.provider.clone(), change.model_id.clone()));
-        }
-    }
-    None
+    session.effective_model_for_current_path()
 }
 
 fn last_thinking_level(session: &Session) -> Option<model::ThinkingLevel> {
-    for entry in session.entries.iter().rev() {
-        if let crate::session::SessionEntry::ThinkingLevelChange(change) = entry {
-            if let Some(level) = parse_thinking_level_opt(&change.thinking_level) {
-                return Some(level);
-            }
-        }
-    }
-    None
+    session
+        .effective_thinking_level_for_current_path()
+        .as_deref()
+        .and_then(parse_thinking_level_opt)
+}
+
+fn model_from_session_state(session: &Session) -> Option<(String, String)> {
+    last_model_from_session(session)
+}
+
+fn thinking_level_from_session_state(session: &Session) -> Option<model::ThinkingLevel> {
+    last_thinking_level(session)
 }
 
 pub fn update_session_for_selection(session: &mut Session, selection: &ModelSelection) {
+    let previous_model = model_from_session_state(session);
+    let previous_thinking = thinking_level_from_session_state(session);
+    let (stored_provider, stored_model_id, model_changed) = match previous_model {
+        Some((provider, model_id))
+            if provider_ids_match(&provider, &selection.model_entry.model.provider)
+                && model_id.eq_ignore_ascii_case(&selection.model_entry.model.id) =>
+        {
+            (provider, model_id, false)
+        }
+        _ => (
+            selection.model_entry.model.provider.clone(),
+            selection.model_entry.model.id.clone(),
+            true,
+        ),
+    };
+
     session.set_model_header(
-        Some(selection.model_entry.model.provider.clone()),
-        Some(selection.model_entry.model.id.clone()),
+        Some(stored_provider.clone()),
+        Some(stored_model_id.clone()),
         Some(selection.thinking_level.to_string()),
     );
 
-    let model_changed = match last_model_from_session(session) {
-        Some((provider, model_id)) => {
-            provider != selection.model_entry.model.provider
-                || model_id != selection.model_entry.model.id
-        }
-        None => true,
-    };
-
     if model_changed {
-        session.append_model_change(
-            selection.model_entry.model.provider.clone(),
-            selection.model_entry.model.id.clone(),
-        );
+        session.append_model_change(stored_provider, stored_model_id);
     }
 
-    let thinking_changed = last_thinking_level(session) != Some(selection.thinking_level);
+    let thinking_changed = previous_thinking != Some(selection.thinking_level);
 
     if thinking_changed {
         session.append_thinking_level_change(selection.thinking_level.to_string());
@@ -1500,6 +1504,157 @@ mod tests {
                 "Could not restore model missing-provider/missing-model (model no longer exists). Using openai-codex/gpt-4o-mini."
             )
         );
+    }
+
+    #[test]
+    fn select_model_and_thinking_restores_model_from_header_when_history_missing() {
+        let cli = cli::Cli::parse_from(["pi"]);
+        let config = Config::default();
+        let mut session = Session::in_memory();
+        session.header.provider = Some("openai-codex".to_string());
+        session.header.model_id = Some("gpt-5.4".to_string());
+
+        let registry = registry_with_entries(vec![
+            test_model_entry("gpt-5.4", "openai-codex", true),
+            test_model_entry("gpt-4o-mini", "openai", true),
+        ]);
+
+        let selection =
+            select_model_and_thinking(&cli, &config, &session, &registry, &[], Path::new("/tmp"))
+                .expect("header-only session should restore saved model");
+
+        assert_eq!(selection.model_entry.model.provider, "openai-codex");
+        assert_eq!(selection.model_entry.model.id, "gpt-5.4");
+    }
+
+    #[test]
+    fn select_model_and_thinking_restores_thinking_from_header_when_history_missing() {
+        let cli = cli::Cli::parse_from(["pi", "--continue"]);
+        let config = Config::default();
+        let mut session = Session::in_memory();
+        session.header.provider = Some("openai-codex".to_string());
+        session.header.model_id = Some("gpt-5.4".to_string());
+        session.header.thinking_level = Some("high".to_string());
+
+        let registry = registry_with_entries(vec![test_model_entry("gpt-5.4", "openai-codex", true)]);
+        let selection =
+            select_model_and_thinking(&cli, &config, &session, &registry, &[], Path::new("/tmp"))
+                .expect("header-only session should restore saved thinking level");
+
+        assert_eq!(selection.thinking_level, model::ThinkingLevel::High);
+    }
+
+    #[test]
+    fn select_model_and_thinking_restores_model_from_active_branch_only() {
+        let cli = cli::Cli::parse_from(["pi"]);
+        let config = Config::default();
+        let mut session = Session::in_memory();
+        let root_id = session.append_message(crate::session::SessionMessage::User {
+            content: crate::model::UserContent::Text("root".to_string()),
+            timestamp: Some(0),
+        });
+        let openai_id = session.append_model_change("openai-codex".to_string(), "gpt-5.4".to_string());
+        assert!(session.create_branch_from(&root_id));
+        session.append_model_change("anthropic".to_string(), "claude-sonnet-4".to_string());
+        assert!(session.create_branch_from(&openai_id));
+
+        let registry = registry_with_entries(vec![
+            test_model_entry("gpt-5.4", "openai-codex", true),
+            test_model_entry("claude-sonnet-4", "anthropic", true),
+        ]);
+
+        let selection =
+            select_model_and_thinking(&cli, &config, &session, &registry, &[], Path::new("/tmp"))
+                .expect("active branch model should restore");
+
+        assert_eq!(selection.model_entry.model.provider, "openai-codex");
+        assert_eq!(selection.model_entry.model.id, "gpt-5.4");
+    }
+
+    #[test]
+    fn select_model_and_thinking_restores_thinking_from_active_branch_only() {
+        let cli = cli::Cli::parse_from(["pi", "--continue"]);
+        let config = Config::default();
+        let mut session = Session::in_memory();
+        session.header.provider = Some("openai-codex".to_string());
+        session.header.model_id = Some("gpt-5.4".to_string());
+        let root_id = session.append_message(crate::session::SessionMessage::User {
+            content: crate::model::UserContent::Text("root".to_string()),
+            timestamp: Some(0),
+        });
+        let high_id = session.append_thinking_level_change("high".to_string());
+        assert!(session.create_branch_from(&root_id));
+        session.append_thinking_level_change("minimal".to_string());
+        assert!(session.create_branch_from(&high_id));
+
+        let registry =
+            registry_with_entries(vec![test_model_entry("gpt-5.4", "openai-codex", true)]);
+        let selection =
+            select_model_and_thinking(&cli, &config, &session, &registry, &[], Path::new("/tmp"))
+                .expect("active branch thinking level should restore");
+
+        assert_eq!(selection.thinking_level, model::ThinkingLevel::High);
+    }
+
+    #[test]
+    fn update_session_for_selection_skips_duplicate_changes_for_header_only_session() {
+        let mut session = Session::in_memory();
+        session.header.provider = Some("openai-codex".to_string());
+        session.header.model_id = Some("gpt-5.4".to_string());
+        session.header.thinking_level = Some("high".to_string());
+
+        let selection = ModelSelection {
+            model_entry: test_model_entry("gpt-5.4", "openai-codex", true),
+            thinking_level: model::ThinkingLevel::High,
+            scoped_models: Vec::new(),
+            fallback_message: None,
+        };
+
+        update_session_for_selection(&mut session, &selection);
+
+        assert!(
+            session.entries.is_empty(),
+            "header-only session with unchanged selection should not invent history entries"
+        );
+    }
+
+    #[test]
+    fn update_session_for_selection_preserves_alias_equivalent_model_state() {
+        let mut session = Session::in_memory();
+        session.append_model_change("gemini".to_string(), "gemini-2.5-pro".to_string());
+        session.set_model_header(
+            Some("gemini".to_string()),
+            Some("gemini-2.5-pro".to_string()),
+            Some("high".to_string()),
+        );
+
+        let selection = ModelSelection {
+            model_entry: test_model_entry("GEMINI-2.5-PRO", "google", true),
+            thinking_level: model::ThinkingLevel::High,
+            scoped_models: Vec::new(),
+            fallback_message: None,
+        };
+
+        update_session_for_selection(&mut session, &selection);
+
+        let model_changes: Vec<_> = session
+            .entries_for_current_path()
+            .iter()
+            .filter_map(|entry| {
+                if let crate::session::SessionEntry::ModelChange(change) = entry {
+                    Some((change.provider.as_str(), change.model_id.as_str()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            model_changes,
+            vec![("gemini", "gemini-2.5-pro")],
+            "alias-equivalent startup restore should not append duplicate history"
+        );
+        assert_eq!(session.header.provider.as_deref(), Some("gemini"));
+        assert_eq!(session.header.model_id.as_deref(), Some("gemini-2.5-pro"));
     }
 
     #[test]

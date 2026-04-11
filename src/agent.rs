@@ -3216,6 +3216,60 @@ mod extensions_integration_tests {
     }
 
     #[test]
+    fn agent_extension_session_get_state_uses_branch_local_model_and_thinking() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let mut session = Session::in_memory();
+            let root_id = session.append_message(crate::session::SessionMessage::User {
+                content: UserContent::Text("root".to_string()),
+                timestamp: Some(1),
+            });
+            session.append_model_change("openai".to_string(), "gpt-4o".to_string());
+            let branch_a_thinking = session.append_thinking_level_change("low".to_string());
+            session.set_model_header(
+                Some("openai".to_string()),
+                Some("gpt-4o".to_string()),
+                Some("low".to_string()),
+            );
+
+            assert!(session.create_branch_from(&root_id));
+            session.append_model_change("anthropic".to_string(), "claude-sonnet-4-5".to_string());
+            session.append_thinking_level_change("high".to_string());
+            session.set_model_header(
+                Some("anthropic".to_string()),
+                Some("claude-sonnet-4-5".to_string()),
+                Some("high".to_string()),
+            );
+
+            assert!(session.navigate_to(&branch_a_thinking));
+            let session = Arc::new(Mutex::new(session));
+
+            let extension_session = AgentExtensionSession {
+                handle: SessionHandle(Arc::clone(&session)),
+                is_streaming: Arc::new(AtomicBool::new(false)),
+                is_compacting: Arc::new(AtomicBool::new(false)),
+                queue_modes: Arc::new(StdMutex::new(ExtensionQueueModeState::new(
+                    QueueMode::OneAtATime,
+                    QueueMode::OneAtATime,
+                ))),
+                auto_compaction_enabled: false,
+            };
+
+            let state = <AgentExtensionSession as crate::extensions::ExtensionSession>::get_state(
+                &extension_session,
+            )
+            .await;
+
+            assert_eq!(state["model"]["provider"], "openai");
+            assert_eq!(state["model"]["id"], "gpt-4o");
+            assert_eq!(state["thinkingLevel"], "low");
+        });
+    }
+
+    #[test]
     fn agent_session_set_queue_modes_updates_extension_delivery_state() {
         let provider = Arc::new(NoopProvider);
         let tools = ToolRegistry::new(&[], Path::new("."), None);
@@ -5254,54 +5308,35 @@ impl AgentExtensionSession {
 #[async_trait]
 impl crate::extensions::ExtensionSession for AgentExtensionSession {
     async fn get_state(&self) -> Value {
-        let cx = crate::agent_cx::AgentCx::for_current_or_request();
-        let Ok(session) = self.handle.0.lock(cx.cx()).await else {
+        let (steering_mode, follow_up_mode) = self.current_queue_modes();
+        let mut state =
+            <SessionHandle as crate::extensions::ExtensionSession>::get_state(&self.handle).await;
+        let Some(object) = state.as_object_mut() else {
             return self.state_fallback();
         };
-        let (steering_mode, follow_up_mode) = self.current_queue_modes();
 
-        let session_file = session.path.as_ref().map(|p| p.display().to_string());
-        let session_id = session.header.id.clone();
-        let session_name = session.get_name();
-        let model = session
-            .header
-            .provider
-            .as_ref()
-            .zip(session.header.model_id.as_ref())
-            .map_or(Value::Null, |(provider, model_id)| {
-                json!({
-                    "provider": provider,
-                    "id": model_id,
-                })
-            });
-        let thinking_level = session
-            .header
-            .thinking_level
-            .clone()
-            .unwrap_or_else(|| "off".to_string());
-        let message_count = session
-            .entries_for_current_path()
-            .iter()
-            .filter(|entry| matches!(entry, crate::session::SessionEntry::Message(_)))
-            .count();
-        let pending_message_count = session.autosave_metrics().pending_mutations;
-        let durability_mode = session.autosave_durability_mode().as_str();
+        object.insert(
+            "isStreaming".to_string(),
+            Value::Bool(self.is_streaming.load(std::sync::atomic::Ordering::SeqCst)),
+        );
+        object.insert(
+            "isCompacting".to_string(),
+            Value::Bool(self.is_compacting.load(std::sync::atomic::Ordering::SeqCst)),
+        );
+        object.insert(
+            "steeringMode".to_string(),
+            Value::String(steering_mode.as_str().to_string()),
+        );
+        object.insert(
+            "followUpMode".to_string(),
+            Value::String(follow_up_mode.as_str().to_string()),
+        );
+        object.insert(
+            "autoCompactionEnabled".to_string(),
+            Value::Bool(self.auto_compaction_enabled),
+        );
 
-        json!({
-            "model": model,
-            "thinkingLevel": thinking_level,
-            "durabilityMode": durability_mode,
-            "isStreaming": self.is_streaming.load(std::sync::atomic::Ordering::SeqCst),
-            "isCompacting": self.is_compacting.load(std::sync::atomic::Ordering::SeqCst),
-            "steeringMode": steering_mode.as_str(),
-            "followUpMode": follow_up_mode.as_str(),
-            "sessionFile": session_file,
-            "sessionId": session_id,
-            "sessionName": session_name,
-            "autoCompactionEnabled": self.auto_compaction_enabled,
-            "messageCount": message_count,
-            "pendingMessageCount": pending_message_count,
-        })
+        state
     }
 
     async fn get_messages(&self) -> Vec<crate::session::SessionMessage> {
@@ -5565,16 +5600,16 @@ impl AgentSession {
                 .lock(cx.cx())
                 .await
                 .map_err(|e| Error::session(e.to_string()))?;
-            let previous_model = (
-                session.header.provider.as_deref(),
-                session.header.model_id.as_deref(),
-            );
+            let previous_model = session.effective_model_for_current_path();
             let previous_thinking = session
-                .header
-                .thinking_level
+                .effective_thinking_level_for_current_path()
                 .as_deref()
                 .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok());
-            if previous_model != (Some(provider_id), Some(model_id)) {
+            if previous_model
+                .as_ref()
+                .map(|(provider, model_id)| (provider.as_str(), model_id.as_str()))
+                != Some((provider_id, model_id))
+            {
                 session.append_model_change(provider_id.to_string(), model_id.to_string());
             }
             session.set_model_header(
@@ -5625,22 +5660,19 @@ impl AgentSession {
                 .await
                 .map_err(|e| Error::session(e.to_string()))?;
             (
-                session.header.provider.clone(),
-                session.header.model_id.clone(),
-                session.header.thinking_level.clone(),
+                session.effective_model_for_current_path(),
+                session.effective_thinking_level_for_current_path(),
             )
         };
 
-        let (session_provider, session_model, session_thinking) = session_state;
+        let (session_model, session_thinking) = session_state;
         let current_thinking = self
             .agent
             .stream_options()
             .thinking_level
             .unwrap_or_default();
 
-        if let (Some(provider_id), Some(model_id)) =
-            (session_provider.as_deref(), session_model.as_deref())
-        {
+        if let Some((provider_id, model_id)) = session_model.as_ref() {
             self.apply_session_model_selection(provider_id, model_id)?;
         }
 
@@ -5655,9 +5687,7 @@ impl AgentSession {
         });
         let requested = parsed_session_thinking.unwrap_or(current_thinking);
 
-        let effective = if let (Some(provider_id), Some(model_id)) =
-            (session_provider.as_deref(), session_model.as_deref())
-        {
+        let effective = if let Some((provider_id, model_id)) = session_model.as_ref() {
             self.clamp_thinking_level_for_model(provider_id, model_id, requested)
         } else {
             requested

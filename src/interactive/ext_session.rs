@@ -1,5 +1,6 @@
 use super::conversation::extension_model_from_entry;
 use super::*;
+use crate::provider_metadata::{canonical_provider_id, provider_ids_match};
 
 #[derive(Clone)]
 pub(super) struct InteractiveExtensionHostActions {
@@ -150,19 +151,62 @@ pub(super) struct InteractiveExtensionSession {
     pub(super) save_enabled: bool,
 }
 
+fn current_path_model_pair(session: &Session) -> Option<(String, String)> {
+    session.effective_model_for_current_path()
+}
+
+fn current_path_model_fields(session: &Session) -> (Option<String>, Option<String>) {
+    if let Some((provider, model_id)) = current_path_model_pair(session) {
+        (Some(provider), Some(model_id))
+    } else {
+        (
+            session
+                .header
+                .fallback_provider
+                .clone()
+                .or_else(|| session.header.provider.clone()),
+            session
+                .header
+                .fallback_model_id
+                .clone()
+                .or_else(|| session.header.model_id.clone()),
+        )
+    }
+}
+
+fn current_path_thinking_level(session: &Session) -> Option<String> {
+    session.effective_thinking_level_for_current_path()
+}
+
+fn session_model_state_value(shared_model: &ModelEntry, session: &Session) -> Value {
+    match current_path_model_pair(session) {
+        Some((provider, model_id))
+            if provider_ids_match(&shared_model.model.provider, &provider)
+                && shared_model.model.id.eq_ignore_ascii_case(&model_id) =>
+        {
+            extension_model_from_entry(shared_model)
+        }
+        Some((provider, model_id)) => json!({
+            "provider": provider,
+            "id": model_id,
+        }),
+        None => extension_model_from_entry(shared_model),
+    }
+}
+
 #[async_trait]
 impl ExtensionSession for InteractiveExtensionSession {
     async fn get_state(&self) -> Value {
-        let model = {
-            let guard = self
-                .model_entry
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            extension_model_from_entry(&guard)
-        };
+        let shared_model = self
+            .model_entry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let fallback_model = extension_model_from_entry(&shared_model);
 
         let cx = Cx::current().unwrap_or_else(Cx::for_request);
         let (
+            model,
             session_file,
             session_id,
             session_name,
@@ -177,6 +221,7 @@ impl ExtensionSession for InteractiveExtensionSession {
         ) = self.session.lock(&cx).await.map_or_else(
             |_| {
                 (
+                    fallback_model.clone(),
                     None,
                     String::new(),
                     None,
@@ -191,17 +236,15 @@ impl ExtensionSession for InteractiveExtensionSession {
                 )
             },
             |guard| {
+                let model = session_model_state_value(&shared_model, &guard);
                 let message_count = guard
                     .entries_for_current_path()
                     .iter()
                     .filter(|entry| matches!(entry, SessionEntry::Message(_)))
                     .count();
                 let session_name = guard.get_name();
-                let thinking_level = guard
-                    .header
-                    .thinking_level
-                    .clone()
-                    .unwrap_or_else(|| "off".to_string());
+                let thinking_level =
+                    current_path_thinking_level(&guard).unwrap_or_else(|| "off".to_string());
                 let autosave_metrics = guard.autosave_metrics();
                 let durability_mode = guard.autosave_durability_mode().as_str().to_string();
                 let autosave_backpressure = autosave_metrics.max_pending_mutations > 0
@@ -217,6 +260,7 @@ impl ExtensionSession for InteractiveExtensionSession {
                 }
                 .to_string();
                 (
+                    model,
                     guard.path.as_ref().map(|p| p.display().to_string()),
                     guard.header.id.clone(),
                     session_name,
@@ -356,12 +400,22 @@ impl ExtensionSession for InteractiveExtensionSession {
             self.session.lock(&cx).await.map_err(|err| {
                 crate::error::Error::session(format!("session lock failed: {err}"))
             })?;
-        let changed = guard.header.provider.as_deref() != Some(provider.as_str())
-            || guard.header.model_id.as_deref() != Some(model_id.as_str());
+        let normalized_provider = canonical_provider_id(&provider)
+            .unwrap_or(&provider)
+            .to_string();
+        let (stored_provider, stored_model_id, changed) = match current_path_model_pair(&guard) {
+            Some((current_provider, current_model_id))
+                if provider_ids_match(&current_provider, &provider)
+                    && current_model_id.eq_ignore_ascii_case(&model_id) =>
+            {
+                (current_provider, current_model_id, false)
+            }
+            _ => (normalized_provider, model_id.clone(), true),
+        };
         if changed {
-            guard.append_model_change(provider.clone(), model_id.clone());
+            guard.append_model_change(stored_provider.clone(), stored_model_id.clone());
         }
-        guard.set_model_header(Some(provider), Some(model_id), None);
+        guard.set_model_header(Some(stored_provider), Some(stored_model_id), None);
         if self.save_enabled {
             guard.save().await?;
         }
@@ -373,24 +427,31 @@ impl ExtensionSession for InteractiveExtensionSession {
         let Ok(guard) = self.session.lock(&cx).await else {
             return (None, None);
         };
-        (guard.header.provider.clone(), guard.header.model_id.clone())
+        current_path_model_fields(&guard)
     }
 
     async fn set_thinking_level(&self, level: String) -> crate::error::Result<()> {
         let cx = Cx::current().unwrap_or_else(Cx::for_request);
-        let effective_level = match level.parse::<crate::model::ThinkingLevel>() {
-            Ok(parsed) => self
-                .model_entry
-                .lock()
-                .map(|entry| entry.clamp_thinking_level(parsed).to_string())
-                .unwrap_or(level),
-            Err(_) => level,
-        };
+        let shared_model = self.model_entry.lock().map(|entry| entry.clone()).ok();
         let mut guard =
             self.session.lock(&cx).await.map_err(|err| {
                 crate::error::Error::session(format!("session lock failed: {err}"))
             })?;
-        let changed = guard.header.thinking_level.as_deref() != Some(effective_level.as_str());
+        let effective_level = level.parse::<crate::model::ThinkingLevel>().map_or_else(
+            |_| level.clone(),
+            |parsed| match (shared_model.as_ref(), current_path_model_pair(&guard)) {
+                (Some(entry), Some((provider, model_id)))
+                    if provider_ids_match(&entry.model.provider, &provider)
+                        && entry.model.id.eq_ignore_ascii_case(&model_id) =>
+                {
+                    entry.clamp_thinking_level(parsed).to_string()
+                }
+                (Some(entry), None) => entry.clamp_thinking_level(parsed).to_string(),
+                _ => level.clone(),
+            },
+        );
+        let changed =
+            current_path_thinking_level(&guard).as_deref() != Some(effective_level.as_str());
         guard.set_model_header(None, None, Some(effective_level.clone()));
         if changed {
             guard.append_thinking_level_change(effective_level);
@@ -406,7 +467,7 @@ impl ExtensionSession for InteractiveExtensionSession {
         let Ok(guard) = self.session.lock(&cx).await else {
             return None;
         };
-        guard.header.thinking_level.clone()
+        current_path_thinking_level(&guard)
     }
 
     async fn set_label(
@@ -1043,6 +1104,53 @@ mod tests {
     }
 
     #[test]
+    fn set_thinking_level_does_not_clamp_against_stale_shared_model() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            {
+                let cx = Cx::for_request();
+                let mut guard = session.lock(&cx).await.expect("lock session");
+                guard.append_model_change("anthropic".to_string(), "claude-sonnet-4-5".to_string());
+                guard.set_model_header(
+                    Some("anthropic".to_string()),
+                    Some("claude-sonnet-4-5".to_string()),
+                    None,
+                );
+            }
+
+            let ext_session = InteractiveExtensionSession {
+                session: Arc::clone(&session),
+                model_entry: Arc::new(StdMutex::new(dummy_model_entry())),
+                is_streaming: Arc::new(AtomicBool::new(false)),
+                is_compacting: Arc::new(AtomicBool::new(false)),
+                config: Config::default(),
+                save_enabled: false,
+            };
+
+            ext_session
+                .set_thinking_level("high".to_string())
+                .await
+                .expect("thinking update should preserve requested level");
+
+            let cx = Cx::for_request();
+            let guard = session.lock(&cx).await.expect("lock session");
+            assert_eq!(guard.header.thinking_level.as_deref(), Some("high"));
+            let thinking_changes = guard
+                .entries_for_current_path()
+                .iter()
+                .filter(|entry| {
+                    matches!(entry, crate::session::SessionEntry::ThinkingLevelChange(_))
+                })
+                .count();
+            assert_eq!(thinking_changes, 1);
+        });
+    }
+
+    #[test]
     fn set_model_avoids_duplicate_history_for_same_target() {
         let runtime = RuntimeBuilder::current_thread()
             .build()
@@ -1076,6 +1184,234 @@ mod tests {
                 .filter(|entry| matches!(entry, crate::session::SessionEntry::ModelChange(_)))
                 .count();
             assert_eq!(model_changes, 1);
+        });
+    }
+
+    #[test]
+    fn set_model_dedupes_provider_alias_targets_without_rewriting_current_branch_state() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let session = Arc::new(Mutex::new(Session::in_memory()));
+            {
+                let cx = Cx::for_request();
+                let mut guard = session.lock(&cx).await.expect("lock session");
+                guard.append_model_change("google".to_string(), "gemini-2.5-pro".to_string());
+                guard.set_model_header(
+                    Some("google".to_string()),
+                    Some("gemini-2.5-pro".to_string()),
+                    None,
+                );
+            }
+            let ext_session = InteractiveExtensionSession {
+                session: Arc::clone(&session),
+                model_entry: Arc::new(StdMutex::new(dummy_model_entry())),
+                is_streaming: Arc::new(AtomicBool::new(false)),
+                is_compacting: Arc::new(AtomicBool::new(false)),
+                config: Config::default(),
+                save_enabled: false,
+            };
+
+            ext_session
+                .set_model("gemini".to_string(), "gemini-2.5-pro".to_string())
+                .await
+                .expect("alias target should dedupe");
+
+            let cx = Cx::for_request();
+            let guard = session.lock(&cx).await.expect("lock session");
+            let branch = guard.entries_for_current_path();
+            let model_changes: Vec<_> = branch
+                .iter()
+                .filter_map(|entry| {
+                    if let crate::session::SessionEntry::ModelChange(change) = entry {
+                        Some((change.provider.as_str(), change.model_id.as_str()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            assert_eq!(model_changes, vec![("google", "gemini-2.5-pro")]);
+            assert_eq!(guard.header.provider.as_deref(), Some("google"));
+            assert_eq!(guard.header.model_id.as_deref(), Some("gemini-2.5-pro"));
+        });
+    }
+
+    #[test]
+    fn branch_local_model_and_thinking_state_follow_current_path() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let mut session_state = Session::in_memory();
+            let root_id = session_state.append_message(SessionMessage::User {
+                content: crate::model::UserContent::Text("root".to_string()),
+                timestamp: Some(0),
+            });
+            session_state.append_model_change("openai".to_string(), "gpt-4o".to_string());
+            let branch_a_thinking = session_state.append_thinking_level_change("low".to_string());
+            session_state.set_model_header(
+                Some("openai".to_string()),
+                Some("gpt-4o".to_string()),
+                Some("low".to_string()),
+            );
+
+            assert!(session_state.create_branch_from(&root_id));
+            session_state
+                .append_model_change("anthropic".to_string(), "claude-sonnet-4-5".to_string());
+            session_state.append_thinking_level_change("high".to_string());
+            session_state.set_model_header(
+                Some("anthropic".to_string()),
+                Some("claude-sonnet-4-5".to_string()),
+                Some("high".to_string()),
+            );
+
+            assert!(session_state.navigate_to(&branch_a_thinking));
+
+            let session = Arc::new(Mutex::new(session_state));
+            let ext_session = InteractiveExtensionSession {
+                session,
+                model_entry: Arc::new(StdMutex::new(dummy_model_entry())),
+                is_streaming: Arc::new(AtomicBool::new(false)),
+                is_compacting: Arc::new(AtomicBool::new(false)),
+                config: Config::default(),
+                save_enabled: false,
+            };
+
+            let state = ext_session.get_state().await;
+            let (provider, model_id) = ext_session.get_model().await;
+            let thinking_level = ext_session.get_thinking_level().await;
+
+            assert_eq!(provider.as_deref(), Some("openai"));
+            assert_eq!(model_id.as_deref(), Some("gpt-4o"));
+            assert_eq!(thinking_level.as_deref(), Some("low"));
+            assert_eq!(state["model"]["provider"], "openai");
+            assert_eq!(state["model"]["id"], "gpt-4o");
+            assert_eq!(state["thinkingLevel"], "low");
+        });
+    }
+
+    #[test]
+    fn branch_without_overrides_does_not_inherit_stale_header_state() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let mut session_state = Session::in_memory();
+            let root_id = session_state.append_message(SessionMessage::User {
+                content: crate::model::UserContent::Text("root".to_string()),
+                timestamp: Some(0),
+            });
+            let branch_a_tip = session_state.append_message(SessionMessage::User {
+                content: crate::model::UserContent::Text("branch-a".to_string()),
+                timestamp: Some(0),
+            });
+
+            assert!(session_state.create_branch_from(&root_id));
+            session_state
+                .append_model_change("anthropic".to_string(), "claude-sonnet-4-5".to_string());
+            session_state.append_thinking_level_change("high".to_string());
+            session_state.set_model_header(
+                Some("anthropic".to_string()),
+                Some("claude-sonnet-4-5".to_string()),
+                Some("high".to_string()),
+            );
+
+            assert!(session_state.navigate_to(&branch_a_tip));
+
+            let session = Arc::new(Mutex::new(session_state));
+            let ext_session = InteractiveExtensionSession {
+                session,
+                model_entry: Arc::new(StdMutex::new(dummy_model_entry())),
+                is_streaming: Arc::new(AtomicBool::new(false)),
+                is_compacting: Arc::new(AtomicBool::new(false)),
+                config: Config::default(),
+                save_enabled: false,
+            };
+
+            let state = ext_session.get_state().await;
+            let (provider, model_id) = ext_session.get_model().await;
+            let thinking_level = ext_session.get_thinking_level().await;
+
+            assert!(provider.is_none());
+            assert!(model_id.is_none());
+            assert!(thinking_level.is_none());
+            assert!(state["model"].is_null());
+            assert_eq!(state["thinkingLevel"], "off");
+        });
+    }
+
+    #[test]
+    fn set_model_and_thinking_dedupe_on_switched_branch() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let mut session_state = Session::in_memory();
+            let root_id = session_state.append_message(SessionMessage::User {
+                content: crate::model::UserContent::Text("root".to_string()),
+                timestamp: Some(0),
+            });
+            session_state.append_model_change("openai".to_string(), "gpt-4o".to_string());
+            let branch_a_thinking = session_state.append_thinking_level_change("low".to_string());
+            session_state.set_model_header(
+                Some("openai".to_string()),
+                Some("gpt-4o".to_string()),
+                Some("low".to_string()),
+            );
+
+            assert!(session_state.create_branch_from(&root_id));
+            session_state
+                .append_model_change("anthropic".to_string(), "claude-sonnet-4-5".to_string());
+            session_state.append_thinking_level_change("high".to_string());
+            session_state.set_model_header(
+                Some("anthropic".to_string()),
+                Some("claude-sonnet-4-5".to_string()),
+                Some("high".to_string()),
+            );
+
+            assert!(session_state.navigate_to(&branch_a_thinking));
+
+            let session = Arc::new(Mutex::new(session_state));
+            let ext_session = InteractiveExtensionSession {
+                session: Arc::clone(&session),
+                model_entry: Arc::new(StdMutex::new(dummy_model_entry())),
+                is_streaming: Arc::new(AtomicBool::new(false)),
+                is_compacting: Arc::new(AtomicBool::new(false)),
+                config: Config::default(),
+                save_enabled: false,
+            };
+
+            ext_session
+                .set_model("openai".to_string(), "gpt-4o".to_string())
+                .await
+                .expect("same-branch model should dedupe");
+            ext_session
+                .set_thinking_level("low".to_string())
+                .await
+                .expect("same-branch thinking should dedupe");
+
+            let cx = Cx::for_request();
+            let guard = session.lock(&cx).await.expect("lock session");
+            let branch = guard.entries_for_current_path();
+            let model_changes = branch
+                .iter()
+                .filter(|entry| matches!(entry, crate::session::SessionEntry::ModelChange(_)))
+                .count();
+            let thinking_changes = branch
+                .iter()
+                .filter(|entry| {
+                    matches!(entry, crate::session::SessionEntry::ThinkingLevelChange(_))
+                })
+                .count();
+
+            assert_eq!(model_changes, 1);
+            assert_eq!(thinking_changes, 1);
         });
     }
 

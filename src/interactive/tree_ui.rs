@@ -351,6 +351,9 @@ impl PiApp {
             self.current_tool = None;
             self.abort_handle = None;
             self.status_message = Some(format!("Switched to {status_leaf}"));
+            if let Err(message) = self.sync_runtime_selection_from_session_header() {
+                self.status_message = Some(message);
+            }
             self.scroll_to_bottom();
 
             if let Some(text) = pending.editor_text {

@@ -475,27 +475,20 @@ impl PiApp {
             return;
         }
 
-        let mut agent_guard = match self.agent.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                self.status_message = Some("Agent busy; try again".to_string());
-                return;
-            }
+        let Ok(mut agent_guard) = self.agent.try_lock() else {
+            self.status_message = Some("Agent busy; try again".to_string());
+            return;
         };
-        let mut session_guard = match self.session.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                self.status_message = Some("Session busy; try again".to_string());
-                return;
-            }
+        let Ok(mut session_guard) = self.session.try_lock() else {
+            self.status_message = Some("Session busy; try again".to_string());
+            return;
         };
 
         let current = session_guard
-            .header
-            .thinking_level
+            .effective_thinking_level_for_current_path()
             .as_deref()
             .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok())
-            .or(agent_guard.stream_options().thinking_level)
+            .or_else(|| agent_guard.stream_options().thinking_level)
             .unwrap_or_default();
 
         let current_index = levels
@@ -505,8 +498,7 @@ impl PiApp {
         let next = levels[(current_index + 1) % levels.len()];
 
         let previous_level = session_guard
-            .header
-            .thinking_level
+            .effective_thinking_level_for_current_path()
             .as_deref()
             .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok());
         session_guard.header.thinking_level = Some(next.to_string());

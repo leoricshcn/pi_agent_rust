@@ -2529,6 +2529,87 @@ mod stream_delta_batcher_tests {
     }
 
     #[test]
+    fn fast_tree_navigation_syncs_runtime_model_and_thinking_from_target_branch() {
+        let (mut app, _event_rx) = build_test_app_with_provider(Arc::new(DummyProvider));
+        let mut next = model_entry("openai", "gpt-4o");
+        next.model.reasoning = false;
+        app.available_models.push(next.clone());
+
+        let (session_id, current_leaf_id, target_leaf_id) = runtime().block_on(async {
+            let cx = Cx::for_request();
+            let mut session_guard =
+                asupersync::sync::OwnedMutexGuard::lock(Arc::clone(&app.session), &cx)
+                    .await
+                    .expect("lock session");
+            let root_id = session_guard.append_message(crate::session::SessionMessage::User {
+                content: crate::model::UserContent::Text("root".to_string()),
+                timestamp: Some(0),
+            });
+            let current_leaf_id = session_guard.append_message(crate::session::SessionMessage::User {
+                content: crate::model::UserContent::Text("current".to_string()),
+                timestamp: Some(0),
+            });
+            assert!(session_guard.create_branch_from(&root_id));
+            session_guard.append_model_change(next.model.provider.clone(), next.model.id.clone());
+            session_guard.append_thinking_level_change("high".to_string());
+            let target_leaf_id = session_guard.append_message(crate::session::SessionMessage::User {
+                content: crate::model::UserContent::Text("target".to_string()),
+                timestamp: Some(0),
+            });
+            assert!(session_guard.navigate_to(&current_leaf_id));
+            (
+                session_guard.header.id.clone(),
+                Some(current_leaf_id),
+                Some(target_leaf_id),
+            )
+        });
+
+        let switched = app.start_tree_navigation(
+            super::super::tree::PendingTreeNavigation {
+                session_id,
+                old_leaf_id: current_leaf_id,
+                selected_entry_id: target_leaf_id
+                    .clone()
+                    .expect("target leaf id for pending navigation"),
+                new_leaf_id: target_leaf_id,
+                editor_text: None,
+                entries_to_summarize: Vec::new(),
+                summary_from_id: String::new(),
+                api_key_present: false,
+            },
+            super::super::tree::TreeSummaryChoice::NoSummary,
+            None,
+        );
+
+        assert!(switched, "fast tree navigation should succeed");
+        assert_eq!(app.model, "openai/gpt-4o");
+        assert_eq!(app.model_entry.model.provider, "openai");
+        assert_eq!(app.model_entry.model.id, "gpt-4o");
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|msg| msg.starts_with("Switched to ")),
+            "status should still report the branch switch"
+        );
+
+        let shared = app
+            .model_entry_shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(shared.model.provider, "openai");
+        assert_eq!(shared.model.id, "gpt-4o");
+        drop(shared);
+
+        let agent_guard = app.agent.try_lock().expect("lock agent");
+        assert_eq!(agent_guard.provider().name(), "openai");
+        assert_eq!(agent_guard.provider().model_id(), "gpt-4o");
+        assert_eq!(
+            agent_guard.stream_options().thinking_level,
+            Some(crate::model::ThinkingLevel::Off)
+        );
+    }
+
+    #[test]
     fn empty_custom_overlay_frame_keeps_overlay_visible() {
         let mut app = build_test_app();
         let poll_request = ExtensionUiRequest::new(
