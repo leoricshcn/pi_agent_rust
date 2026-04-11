@@ -403,18 +403,35 @@ fn match_json_subset(actual: &serde_json::Value, expected: &serde_json::Value) -
                     json_type_name(actual)
                 )
             })?;
-            if actual_items.len() != expected_items.len() {
+            if actual_items.len() < expected_items.len() {
                 return Err(format!(
-                    "expected array length {}, found {}",
+                    "expected array length at least {}, found {}",
                     expected_items.len(),
                     actual_items.len()
                 ));
             }
-            for (idx, (actual_item, expected_item)) in
-                actual_items.iter().zip(expected_items.iter()).enumerate()
-            {
-                match_json_subset(actual_item, expected_item)
-                    .map_err(|reason| format!("at index {idx}: {reason}"))?;
+            let mut candidates: Vec<Vec<usize>> = Vec::with_capacity(expected_items.len());
+            for (expected_idx, expected_item) in expected_items.iter().enumerate() {
+                let mut matches = Vec::new();
+                for (actual_idx, actual_item) in actual_items.iter().enumerate() {
+                    if match_json_subset(actual_item, expected_item).is_ok() {
+                        matches.push(actual_idx);
+                    }
+                }
+                if matches.is_empty() {
+                    let expected_repr = serde_json::to_string(expected_item)
+                        .unwrap_or_else(|_| expected_item.to_string());
+                    return Err(format!(
+                        "missing array element at index {expected_idx}: {expected_repr}"
+                    ));
+                }
+                candidates.push(matches);
+            }
+
+            let mut used = vec![false; actual_items.len()];
+            if !array_subset_backtrack(0, &candidates, &mut used) {
+                return Err("array subset match requires distinct elements; refine expected array"
+                    .to_string());
             }
             Ok(())
         }
@@ -426,6 +443,27 @@ fn match_json_subset(actual: &serde_json::Value, expected: &serde_json::Value) -
             }
         }
     }
+}
+
+fn array_subset_backtrack(
+    expected_idx: usize,
+    candidates: &[Vec<usize>],
+    used: &mut [bool],
+) -> bool {
+    if expected_idx == candidates.len() {
+        return true;
+    }
+    for &candidate in &candidates[expected_idx] {
+        if used[candidate] {
+            continue;
+        }
+        used[candidate] = true;
+        if array_subset_backtrack(expected_idx + 1, candidates, used) {
+            return true;
+        }
+        used[candidate] = false;
+    }
+    false
 }
 
 const fn json_type_name(value: &serde_json::Value) -> &'static str {
@@ -557,6 +595,62 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_details_subset_accepts_array_superset_out_of_order() {
+        let expected = Expected {
+            details: std::iter::once((
+                "items".to_string(),
+                serde_json::json!([{"id": 1}, {"id": 2}]),
+            ))
+            .collect(),
+            ..Default::default()
+        };
+
+        let actual = serde_json::json!({
+            "items": [
+                {"id": 2, "extra": true},
+                {"id": 3},
+                {"id": 1, "note": "ok"}
+            ]
+        });
+
+        assert!(validate_expected(&expected, "", Some(&actual)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_details_subset_rejects_missing_array_item() {
+        let expected = Expected {
+            details: std::iter::once(("items".to_string(), serde_json::json!([1, 2]))).collect(),
+            ..Default::default()
+        };
+
+        let actual = serde_json::json!({ "items": [2, 3] });
+        let err = validate_expected(&expected, "", Some(&actual))
+            .expect_err("subset should require all expected array items");
+        assert!(err.contains("missing array element"));
+    }
+
+    #[test]
+    fn test_validate_details_subset_array_backtracks_for_ambiguous_matches() {
+        let expected = Expected {
+            details: std::iter::once((
+                "items".to_string(),
+                serde_json::json!([{"id": 1}, {"id": 1, "tag": "a"}]),
+            ))
+            .collect(),
+            ..Default::default()
+        };
+
+        let actual = serde_json::json!({
+            "items": [
+                {"id": 1, "tag": "a"},
+                {"id": 1, "tag": "b"}
+            ]
+        });
+
+        assert!(validate_expected(&expected, "", Some(&actual)).is_ok());
+    }
+
+    #[test]
     fn test_validate_details_contains_diff() {
         let expected = Expected {
             details_contains: vec!["-1 Hello".to_string(), "+1 Hi".to_string()],
@@ -616,6 +710,7 @@ mod tests {
         let details = serde_json::json!({
             "tools": "read,bash,edit,write,grep,find,ls,hashline_edit",
             "extension": [],
+            "extension_flags": [],
             "theme_path": [],
             "prompt_template": [],
             "skill": [],
@@ -699,6 +794,47 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_expected_rejects_absolute_golden_path() {
+        let expected = Expected {
+            content_golden: Some("/tmp/absolute.txt".to_string()),
+            ..Default::default()
+        };
+
+        let err = validate_expected_with_goldens(&expected, "", None)
+            .expect_err("must reject absolute path");
+        assert!(err.contains("relative to tests/conformance/goldens"));
+    }
+
+    #[test]
+    fn test_match_json_subset_requires_distinct_array_elements() {
+        let expected = serde_json::json!([
+            { "id": 1 },
+            { "id": 1 }
+        ]);
+        let actual = serde_json::json!([
+            { "id": 1 }
+        ]);
+
+        let err = match_json_subset(&actual, &expected)
+            .expect_err("duplicate expected elements should require distinct matches");
+        assert!(err.contains("distinct elements"));
+    }
+
+    #[test]
+    fn test_match_json_subset_allows_distinct_duplicate_matches() {
+        let expected = serde_json::json!([
+            { "id": 1 },
+            { "id": 1 }
+        ]);
+        let actual = serde_json::json!([
+            { "id": 1 },
+            { "id": 1 }
+        ]);
+
+        assert!(match_json_subset(&actual, &expected).is_ok());
+    }
+
+    #[test]
     fn test_canonicalize_json_is_idempotent() {
         let sample = serde_json::json!({
             "b": 2,
@@ -770,6 +906,81 @@ mod tests {
             });
 
             prop_assert!(validate_expected(&expected, "", Some(&actual)).is_ok());
+        }
+
+        #[test]
+        fn proptest_content_contains_is_monotonic_under_append(
+            prefix in "[a-zA-Z0-9 _-]{0,12}",
+            suffix in "[a-zA-Z0-9 _-]{0,12}",
+            extra in "[a-zA-Z0-9 _-]{0,12}",
+            needle_a in "[a-zA-Z]{1,6}",
+            needle_b in "[a-zA-Z]{1,6}",
+        ) {
+            let expected = Expected {
+                content_contains: vec![needle_a.clone(), needle_b.clone()],
+                ..Default::default()
+            };
+
+            let base = format!("{prefix}{needle_a}:{needle_b}{suffix}");
+            let extended = format!("{base}{extra}");
+
+            prop_assert!(validate_expected(&expected, &base, None).is_ok());
+            prop_assert!(validate_expected(&expected, &extended, None).is_ok());
+        }
+
+        #[test]
+        fn proptest_content_not_contains_is_monotonic_under_safe_append(
+            prefix in "[a-z0-9 _-]{0,12}",
+            suffix in "[a-z0-9 _-]{0,12}",
+            extra in "[a-z0-9 _-]{0,12}",
+            needle in "[A-Z]{1,6}",
+        ) {
+            let expected = Expected {
+                content_not_contains: vec![needle],
+                ..Default::default()
+            };
+
+            let base = format!("{prefix}{suffix}");
+            let extended = format!("{base}{extra}");
+
+            prop_assert!(validate_expected(&expected, &base, None).is_ok());
+            prop_assert!(validate_expected(&expected, &extended, None).is_ok());
+        }
+
+        #[test]
+        fn proptest_details_subset_array_is_monotonic(
+            head in proptest::collection::vec(any::<u8>(), 0..8),
+            tail in proptest::collection::vec(any::<u8>(), 0..8),
+        ) {
+            let expected = Expected {
+                details: std::iter::once(("items".to_string(), serde_json::json!(&head)))
+                    .collect(),
+                ..Default::default()
+            };
+
+            let mut actual_items = head;
+            actual_items.extend(tail);
+            let actual = serde_json::json!({ "items": actual_items });
+
+            prop_assert!(validate_expected(&expected, "", Some(&actual)).is_ok());
+        }
+
+        #[test]
+        fn proptest_canonicalize_json_invariant_to_key_order(
+            map in proptest::collection::btree_map("[a-z]{1,6}", any::<u8>(), 0..12),
+        ) {
+            let mut forward = serde_json::Map::new();
+            for (key, value) in &map {
+                forward.insert(key.clone(), serde_json::json!(*value));
+            }
+            let mut reverse = serde_json::Map::new();
+            for (key, value) in map.iter().rev() {
+                reverse.insert(key.clone(), serde_json::json!(*value));
+            }
+
+            let left = serde_json::Value::Object(forward);
+            let right = serde_json::Value::Object(reverse);
+            prop_assert_eq!(canonicalize_json(&left), canonicalize_json(&right));
         }
     }
 }

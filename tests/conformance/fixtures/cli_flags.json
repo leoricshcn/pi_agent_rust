@@ -130,6 +130,22 @@
       }
     },
     {
+      "name": "extension_flags",
+      "description": "Unknown flags are extracted for extensions without breaking parsing",
+      "input": {
+        "args": ["--plan", "ship-it", "--dry-run", "--model", "gpt-4o"]
+      },
+      "expected": {
+        "details_exact": {
+          "model": "gpt-4o",
+          "extension_flags": [
+            { "name": "plan", "value": "ship-it" },
+            { "name": "dry-run", "value": null }
+          ]
+        }
+      }
+    },
+    {
       "name": "policy_and_surface_control_flags",
       "description": "Newer policy and surface flags remain covered by conformance fixtures",
       "requirement_ids": ["CLI-FLAGS-POLICY-AND-SURFACE"],

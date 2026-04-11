@@ -996,7 +996,7 @@ fn is_js_like(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
-    matches!(ext, "ts" | "js" | "tsx" | "jsx" | "mts" | "cts")
+    matches!(ext, "ts" | "js" | "tsx" | "jsx" | "mjs" | "cjs" | "mts" | "cts")
 }
 
 fn relative_posix(root: &Path, path: &Path) -> String {
@@ -15488,13 +15488,11 @@ fn resolve_extension_index(root: &Path) -> Option<PathBuf> {
     if index_native.exists() {
         return Some(index_native);
     }
-    let index_ts = root.join("index.ts");
-    if index_ts.exists() {
-        return Some(index_ts);
-    }
-    let index_js = root.join("index.js");
-    if index_js.exists() {
-        return Some(index_js);
+    for ext in JS_EXTENSION_ENTRY_EXTS {
+        let candidate = root.join(format!("index.{ext}"));
+        if candidate.exists() {
+            return Some(candidate);
+        }
     }
     None
 }
@@ -19087,7 +19085,9 @@ pub type ExtensionRuntimeHandle = native_runtime_duplicate_scaffold::ExtensionRu
 pub type NativeRustExtensionRuntimeHandle =
     native_runtime_duplicate_scaffold::NativeRustExtensionRuntimeHandle;
 
-const JS_EXTENSION_ENTRY_EXTS: &[&str] = &["ts", "tsx", "js", "mjs", "cjs", "mts", "cts"];
+const JS_EXTENSION_ENTRY_EXTS: &[&str] = &[
+    "ts", "tsx", "jsx", "js", "mjs", "cjs", "mts", "cts",
+];
 const MAX_BUNDLE_CLUSTER_DIRS: usize = 40;
 const MAX_AUXILIARY_EXAMPLE_ENTRIES: usize = 24;
 const AUXILIARY_EXTENSION_DIR_NAMES: &[&str] = &["examples", "example", "demos", "demo"];
@@ -19103,10 +19103,21 @@ fn is_supported_js_extension_entry(path: &Path) -> bool {
 }
 
 fn resolve_extension_entry_file(path: &Path) -> Option<PathBuf> {
-    if path.is_file() && is_supported_js_extension_entry(path) {
-        return Some(safe_canonicalize(path));
+    if path.is_file() {
+        if is_supported_js_extension_entry(path) {
+            return Some(safe_canonicalize(path));
+        }
+        return None;
     }
-    if path.extension().is_some() {
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            JS_EXTENSION_ENTRY_EXTS
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(ext))
+        })
+    {
         return None;
     }
 
@@ -27819,8 +27830,7 @@ impl ExtensionManager {
         let name = spec
             .get("name")
             .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or("");
+            .map_or("", str::trim);
         if name.is_empty() {
             tracing::warn!(
                 event = "pi.extensions.mcp_invalid_spec",
@@ -29703,6 +29713,20 @@ mod tests {
         assert!(discovered.contains(&safe_canonicalize(&powerline)));
         assert!(discovered.contains(&safe_canonicalize(&mcp_index)));
         assert!(discovered.contains(&safe_canonicalize(&subagent_index)));
+    }
+
+    #[test]
+    fn collect_extension_entries_from_dir_handles_dotted_dir_names() {
+        let temp = tempdir().expect("tempdir");
+        let extensions_dir = temp.path().join("extensions");
+        let dotted_dir = extensions_dir.join("foo.bar");
+        std::fs::create_dir_all(&dotted_dir).expect("mkdir dotted");
+
+        let dotted_entry = dotted_dir.join("foo.bar.ts");
+        std::fs::write(&dotted_entry, "export default {};\n").expect("write dotted entry");
+
+        let discovered = collect_extension_entries_from_dir(&extensions_dir);
+        assert!(discovered.contains(&safe_canonicalize(&dotted_entry)));
     }
 
     #[test]
@@ -50685,6 +50709,42 @@ mod tests {
                 assert_eq!(js.entry_path, safe_canonicalize(&entry));
             }
             other => panic!(),
+        }
+    }
+
+    fn write_js_entry(dir: &std::path::Path, ext: &str) -> PathBuf {
+        let entry = dir.join(format!("index.{ext}"));
+        std::fs::write(
+            &entry,
+            r"
+            export default function init(_pi) {}
+            ",
+        )
+        .expect("write js entry");
+        entry
+    }
+
+    #[test]
+    fn resolve_extension_load_spec_detects_js_entrypoint_dir_variants() {
+        for ext in ["mjs", "cjs", "mts", "cts", "tsx", "jsx"] {
+            let dir = tempdir().expect("tempdir");
+            let entry = write_js_entry(dir.path(), ext);
+
+            let spec = resolve_extension_load_spec(dir.path())
+                .unwrap_or_else(|err| panic!("resolve load spec for {ext}: {err}"));
+            match spec {
+                ExtensionLoadSpec::Js(js) => {
+                    let expected_id = entry
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|s| s.to_str())
+                        .expect("tempdir name")
+                        .to_string();
+                    assert_eq!(js.extension_id, expected_id);
+                    assert_eq!(js.entry_path, safe_canonicalize(&entry));
+                }
+                other => panic!("expected js spec for {ext}, got {other:?}"),
+            }
         }
     }
 

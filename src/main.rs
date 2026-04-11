@@ -588,11 +588,13 @@ async fn apply_extension_cli_flags(
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            return Err(pi::error::Error::validation(format!(
-                "Unknown extension flag --{}. Registered extension flags: {known}",
-                cli_flag.name
-            ))
-            .into());
+            tracing::debug!(
+                event = "pi.extensions.flags.ignored_unknown",
+                flag = %cli_flag.display_name(),
+                registered = %known,
+                "Ignoring unknown extension flag (not registered by any loaded extension)."
+            );
+            continue;
         }
 
         for spec in matches {
@@ -938,11 +940,11 @@ async fn run(
             .map(cli::ExtensionCliFlag::display_name)
             .collect::<Vec<_>>()
             .join(", ");
-        return Err(pi::error::Error::validation(format!(
-            "Extension flags were provided ({rendered}), but no extensions are loaded. \
-             Add extensions via --extension or remove the flags."
-        ))
-        .into());
+        tracing::debug!(
+            event = "pi.extensions.flags.ignored_no_extensions",
+            flags = %rendered,
+            "Extension flags provided but no extensions are loaded; ignoring."
+        );
     }
 
     let mut has_js_extensions = false;
@@ -1405,10 +1407,11 @@ async fn run(
             .map(pi::cli::ExtensionCliFlag::display_name)
             .collect::<Vec<_>>()
             .join(", ");
-        return Err(pi::error::Error::validation(format!(
-            "Extension flags were provided ({rendered}), but no extensions are loaded. Add extensions via --extension or remove the flags."
-        ))
-        .into());
+        tracing::debug!(
+            event = "pi.extensions.flags.ignored_no_extensions",
+            flags = %rendered,
+            "Extension flags provided but no extensions are loaded; ignoring."
+        );
     }
 
     if has_extensions {
@@ -3410,7 +3413,7 @@ fn list_providers() {
     let mut rows: Vec<(&str, &str, String, String, &str)> = PROVIDER_METADATA
         .iter()
         .map(|meta| {
-            let display = meta.canonical_id;
+            let display = meta.display_name.unwrap_or(meta.canonical_id);
             let aliases = if meta.aliases.is_empty() {
                 String::new()
             } else {
@@ -4952,6 +4955,21 @@ mod tests {
         assert_eq!(parsed.1[0].value.as_deref(), Some("ship-it"));
         assert_eq!(parsed.1[1].name, "dry-run");
         assert!(parsed.1[1].value.is_none());
+    }
+
+    #[test]
+    fn apply_extension_cli_flags_ignores_unknown_flags() {
+        let manager = pi::extensions::ExtensionManager::new();
+        let flags = vec![cli::ExtensionCliFlag {
+            name: "plan".to_string(),
+            value: Some("ship-it".to_string()),
+        }];
+
+        futures::executor::block_on(async {
+            apply_extension_cli_flags(&manager, &flags)
+                .await
+                .expect("unknown extension flag should be ignored");
+        });
     }
 
     #[test]

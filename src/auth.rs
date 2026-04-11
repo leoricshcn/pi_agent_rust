@@ -546,7 +546,10 @@ impl AuthStorage {
         F: FnMut(&str) -> Option<String>,
     {
         if let Some(key) = override_key {
-            return Some(key.to_string());
+            let trimmed = key.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
         }
 
         // Prefer explicit stored OAuth/Bearer credentials over ambient env vars.
@@ -5593,7 +5596,7 @@ mod tests {
     // ── resolve_api_key edge cases ───────────────────────────────────
 
     #[test]
-    fn test_resolve_api_key_empty_override_still_wins() {
+    fn test_resolve_api_key_empty_override_falls_through() {
         let dir = tempfile::tempdir().expect("tmpdir");
         let auth_path = dir.path().join("auth.json");
         let mut auth = AuthStorage {
@@ -5607,9 +5610,9 @@ mod tests {
             },
         );
 
-        // Empty string override still counts as explicit.
+        // Empty string override should not mask stored credentials.
         let resolved = auth.resolve_api_key_with_env_lookup("anthropic", Some(""), |_| None);
-        assert_eq!(resolved.as_deref(), Some(""));
+        assert_eq!(resolved.as_deref(), Some("stored-key"));
     }
 
     #[test]

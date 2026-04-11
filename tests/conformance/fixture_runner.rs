@@ -5,12 +5,12 @@
 use crate::conformance::{
     FixtureFile, SetupStep, TestCase, TestResult, validate_expected_with_goldens,
 };
-use clap::{Parser, error::ErrorKind};
-use pi::cli::{Cli, Commands};
+use clap::error::ErrorKind;
+use pi::cli::{Cli, Commands, ExtensionCliFlag, parse_with_extension_flags};
 use pi::model::ContentBlock;
 use pi::tools::Tool;
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use tempfile::TempDir;
 
 /// Run all test cases from a fixture file.
@@ -140,13 +140,13 @@ fn run_cli_test_case(case: &TestCase, case_name: &str) -> TestResult {
     let mut details: Option<Value> = None;
     let mut parse_error: Option<String> = None;
 
-    match Cli::try_parse_from(cli_args) {
-        Ok(cli) => {
+    match parse_with_extension_flags(cli_args) {
+        Ok(parsed) => {
             // Handle custom --version flag (since clap's is disabled)
-            if cli.version {
+            if parsed.cli.version {
                 content = format!("pi {}", env!("CARGO_PKG_VERSION"));
             }
-            details = Some(cli_details(&cli));
+            details = Some(cli_details(&parsed.cli, &parsed.extension_flags));
         }
         Err(err) => match err.kind() {
             ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
@@ -203,7 +203,7 @@ fn run_cli_test_case(case: &TestCase, case_name: &str) -> TestResult {
     }
 }
 
-fn cli_details(cli: &Cli) -> Value {
+fn cli_details(cli: &Cli, extension_flags: &[ExtensionCliFlag]) -> Value {
     json!({
         "version": cli.version,
         "provider": cli.provider.clone(),
@@ -227,6 +227,7 @@ fn cli_details(cli: &Cli) -> Value {
         "no_tools": cli.no_tools,
         "tools": cli.tools.clone(),
         "extension": cli.extension.clone(),
+        "extension_flags": extension_flags_value(extension_flags),
         "no_extensions": cli.no_extensions,
         "extension_policy": cli.extension_policy.clone(),
         "explain_extension_policy": cli.explain_extension_policy,
@@ -255,6 +256,20 @@ fn cli_details(cli: &Cli) -> Value {
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
     })
+}
+
+fn extension_flags_value(extension_flags: &[ExtensionCliFlag]) -> Value {
+    Value::Array(
+        extension_flags
+            .iter()
+            .map(|flag| {
+                json!({
+                    "name": flag.name.clone(),
+                    "value": flag.value.clone(),
+                })
+            })
+            .collect(),
+    )
 }
 
 fn list_models_value(list_models: Option<&Option<String>>) -> Value {
@@ -327,11 +342,33 @@ fn command_value(command: Option<&Commands>) -> Value {
 }
 
 /// Run setup steps for a test case.
+fn resolve_setup_path(base: &Path, relative: &str) -> Result<PathBuf, String> {
+    let relative_path = Path::new(relative);
+    if relative_path.is_absolute() {
+        return Err(format!(
+            "Setup path must be relative to the fixture temp dir: {relative}"
+        ));
+    }
+
+    for component in relative_path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "Setup path must not escape the fixture temp dir: {relative}"
+                ));
+            }
+        }
+    }
+
+    Ok(base.join(relative_path))
+}
+
 fn run_setup_steps(steps: &[SetupStep], dir: &Path) -> Result<(), String> {
     for step in steps {
         match step {
             SetupStep::CreateFile { path, content } => {
-                let file_path = dir.join(path);
+                let file_path = resolve_setup_path(dir, path)?;
                 if let Some(parent) = file_path.parent() {
                     std::fs::create_dir_all(parent)
                         .map_err(|e| format!("Failed to create parent dirs: {e}"))?;
@@ -340,7 +377,7 @@ fn run_setup_steps(steps: &[SetupStep], dir: &Path) -> Result<(), String> {
                     .map_err(|e| format!("Failed to create file {path}: {e}"))?;
             }
             SetupStep::CreateDir { path } => {
-                let dir_path = dir.join(path);
+                let dir_path = resolve_setup_path(dir, path)?;
                 std::fs::create_dir_all(&dir_path)
                     .map_err(|e| format!("Failed to create dir {path}: {e}"))?;
             }
@@ -509,5 +546,31 @@ mod tests {
         run_setup_steps(&steps, temp_dir.path()).unwrap();
 
         assert!(temp_dir.path().join("mydir").is_dir());
+    }
+
+    #[test]
+    fn test_setup_rejects_parent_dir_escape() {
+        let temp_dir = TempDir::new().unwrap();
+        let steps = vec![SetupStep::CreateFile {
+            path: "../escape.txt".to_string(),
+            content: "nope".to_string(),
+        }];
+
+        let err = run_setup_steps(&steps, temp_dir.path())
+            .expect_err("should reject parent dir escape");
+        assert!(err.contains("must not escape"));
+    }
+
+    #[test]
+    fn test_setup_rejects_absolute_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let absolute = temp_dir.path().join("abs.txt");
+        let steps = vec![SetupStep::CreateDir {
+            path: absolute.to_string_lossy().to_string(),
+        }];
+
+        let err = run_setup_steps(&steps, temp_dir.path())
+            .expect_err("should reject absolute path");
+        assert!(err.contains("must be relative"));
     }
 }

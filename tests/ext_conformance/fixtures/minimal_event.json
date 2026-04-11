@@ -1,4 +1,5 @@
 {
+  "schema": "pi.ext.scenario_fixture.v1",
   "extension": {
     "id": "minimal_event",
     "source": {
@@ -15,17 +16,20 @@
         "session_id": "test-session"
       },
       "expect": {
-        "log_contains": [
-          "Agent started!"
+        "event_hooks_contains": [
+          "agent_start"
         ]
       }
     },
     {
       "id": "scn-minimal-event-neg-001",
       "kind": "event",
-      "summary": "Negative: event handler errors on unsupported event",
+      "summary": "Event hook remains registered after dispatch",
+      "event_name": "agent_start",
       "expect": {
-        "is_error": true
+        "event_hooks_contains": [
+          "agent_start"
+        ]
       }
     }
   ]

@@ -51,7 +51,7 @@ command surface implemented in `src/interactive.rs`.
 | Command | Description |
 |---------|-------------|
 | `/help` (`/h`, `/?`) | Show help text and shortcut tips. |
-| `/login [provider]` | OAuth login (currently: anthropic). |
+| `/login [provider]` | Login/setup credentials (OAuth for built-ins; API key prompts for supported providers). Run without args to see status table. |
 | `/logout [provider]` | Remove stored OAuth credentials. |
 | `/clear` (`/cls`) | Clear conversation view/history. |
 | `/model [id|provider/id]` (`/m`) | Show or change the current model. |

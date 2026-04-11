@@ -718,11 +718,10 @@
 ### Features in TS Pi but missing/unclear in Rust Pi
 
 1. **Agent events**: `auto_compaction_start/end`, `auto_retry_start/end` (bd-2ilgm addresses this)
-2. **Slash commands**: Several TS commands unverified in Rust (`/settings`, `/share`, `/copy`, `/name`, `/session`, `/changelog`, `/hotkeys`, `/fork`, `/login`, `/logout`, `/new`, `/reload`)
-3. **RPC commands**: Many TS RPC commands unverified (`cycle_model`, `set_thinking_level`, `cycle_thinking_level`, `bash`, `abort_bash`, `get_session_stats`, `fork`, `get_messages`, etc.)
-4. **Extension events**: Several hook points unverified (`session_before_*`, `model_select`, `user_bash`, `input`)
-5. **Extension UI**: Several UI methods unverified (`setWorkingMessage`, `setFooter`, `setHeader`, `custom`, `setEditorText`, `editor`)
-6. **Provider support**: Vercel AI Gateway, ZAI, MiniMax, Kimi — unclear if in Rust
+2. **RPC commands**: Many TS RPC commands unverified (`cycle_model`, `set_thinking_level`, `cycle_thinking_level`, `bash`, `abort_bash`, `get_session_stats`, `fork`, `get_messages`, etc.)
+3. **Extension events**: Several hook points unverified (`session_before_*`, `model_select`, `user_bash`, `input`)
+4. **Extension UI**: Several UI methods unverified (`setWorkingMessage`, `setFooter`, `setHeader`, `custom`, `setEditorText`, `editor`)
+5. **Provider support**: Vercel AI Gateway, ZAI, MiniMax, Kimi — unclear if in Rust
 
 ### Features in Rust Pi not in TS Pi (Rust-only)
 

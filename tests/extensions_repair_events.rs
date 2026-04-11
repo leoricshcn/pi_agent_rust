@@ -2523,8 +2523,36 @@ fn golden_manifest_build() {
     assert_eq!(manifest.extension_id, "ext-a");
     assert_eq!(manifest.artifact_count(), 2);
     assert_eq!(manifest.generated_at_ms, 1_700_000_000_000);
-    assert_eq!(manifest.entries[0].relative_path, "src/index.ts");
-    assert_eq!(manifest.entries[0].size_bytes, 12);
+    let src_entry = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.relative_path == "src/index.ts")
+        .expect("missing src/index.ts entry");
+    assert_eq!(src_entry.size_bytes, 12);
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .any(|entry| entry.relative_path == "package.json"),
+        "missing package.json entry"
+    );
+}
+
+#[test]
+fn golden_manifest_order_is_deterministic() {
+    let artifacts_a: &[(&str, &[u8])] = &[
+        ("src/index.ts", b"const x = 1;"),
+        ("package.json", b"{\"name\":\"ext\"}"),
+    ];
+    let artifacts_b: &[(&str, &[u8])] = &[
+        ("package.json", b"{\"name\":\"ext\"}"),
+        ("src/index.ts", b"const x = 1;"),
+    ];
+
+    let manifest_a = build_golden_manifest("ext-a", artifacts_a, 0);
+    let manifest_b = build_golden_manifest("ext-a", artifacts_b, 0);
+
+    assert_eq!(manifest_a.entries, manifest_b.entries);
 }
 
 #[test]

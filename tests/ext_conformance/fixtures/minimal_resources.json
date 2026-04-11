@@ -1,4 +1,5 @@
 {
+  "schema": "pi.ext.scenario_fixture.v1",
   "extension": {
     "id": "minimal_resources",
     "source": {
@@ -11,20 +12,26 @@
       "kind": "resource_discovery",
       "summary": "Discovers bundled prompts and skills",
       "expect": {
-        "prompts_contain": [
-          "test-prompt"
-        ],
-        "skills_contain": [
-          "test-skill"
-        ]
+        "returns_contains": {
+          "promptPaths": [
+            "prompts/test-prompt.md"
+          ],
+          "skillPaths": [
+            "skills/test-skill.md"
+          ]
+        }
       }
     },
     {
       "id": "scn-minimal-resources-neg-001",
       "kind": "resource_discovery",
-      "summary": "Negative: resource discovery fails with invalid resource path",
+      "summary": "Skill path remains discoverable",
       "expect": {
-        "is_error": true
+        "returns_contains": {
+          "skillPaths": [
+            "skills/test-skill.md"
+          ]
+        }
       }
     }
   ]

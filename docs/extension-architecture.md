@@ -8,7 +8,7 @@ boundaries, and structured concurrency.
 
 Extensions support two runtime modes:
 
-1. Legacy JS/TS entrypoints (`.js/.ts/.mjs/.cjs/.tsx/.mts/.cts`) run inside an
+1. Legacy JS/TS entrypoints (`.js/.jsx/.ts/.mjs/.cjs/.tsx/.mts/.cts`) run inside an
    embedded QuickJS interpreter.
 2. Native descriptor entrypoints (`*.native.json`) run through the
    native-rust descriptor runtime.

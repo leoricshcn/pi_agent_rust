@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const EXT_FIXTURE_SCHEMA: &str = "pi.ext.legacy_fixtures.v1";
+const EXT_SCENARIO_SCHEMA: &str = "pi.ext.scenario_fixture.v1";
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/ext_conformance/fixtures")
@@ -57,7 +58,7 @@ fn is_hex_lower(s: &str) -> bool {
     s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
 }
 
-fn validate_fixture(path: &Path, value: &Value) -> Result<(), String> {
+fn validate_legacy_fixture(path: &Path, value: &Value) -> Result<(), String> {
     let schema = require_str(value, "/schema")?;
     if schema != EXT_FIXTURE_SCHEMA {
         return Err(format!(
@@ -166,6 +167,107 @@ fn validate_fixture(path: &Path, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_scenario_fixture(path: &Path, value: &Value) -> Result<(), String> {
+    let schema = require_str(value, "/schema")?;
+    if schema != EXT_SCENARIO_SCHEMA {
+        return Err(format!(
+            "/schema must be {EXT_SCENARIO_SCHEMA}, got {schema}"
+        ));
+    }
+
+    let extension_id = require_str(value, "/extension/id")?;
+    let file_stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("<unknown>");
+    if extension_id != file_stem {
+        return Err(format!(
+            "/extension/id must match filename ({file_stem}), got {extension_id}"
+        ));
+    }
+
+    let source_path = require_str(value, "/extension/source/path")?;
+    if source_path.trim().is_empty() {
+        return Err("/extension/source/path must be non-empty".to_string());
+    }
+
+    let scenarios = require_array(value, "/scenarios")?;
+    if scenarios.is_empty() {
+        return Err("/scenarios must be non-empty".to_string());
+    }
+
+    for (idx, _scenario) in scenarios.iter().enumerate() {
+        let ptr = |suffix: &str| format!("/scenarios/{idx}/{suffix}");
+        let scenario_id = require_str(value, &ptr("id"))?;
+        if scenario_id.trim().is_empty() {
+            return Err(format!("{} must be non-empty", ptr("id")));
+        }
+        let kind = require_str(value, &ptr("kind"))?;
+        let summary = require_str(value, &ptr("summary"))?;
+        if summary.trim().is_empty() {
+            return Err(format!("{} must be non-empty", ptr("summary")));
+        }
+
+        let event_name = value.pointer(&ptr("event_name")).and_then(Value::as_str);
+        let tool_name = value.pointer(&ptr("tool_name")).and_then(Value::as_str);
+        let command_name = value.pointer(&ptr("command_name")).and_then(Value::as_str);
+        let provider_id = value.pointer(&ptr("provider_id")).and_then(Value::as_str);
+
+        match kind {
+            "event" if event_name.is_none() => {
+                return Err(format!(
+                    "{}/event_name must be string for kind=event",
+                    ptr("")
+                ));
+            }
+            "tool" if tool_name.is_none() => {
+                return Err(format!(
+                    "{}/tool_name must be string for kind=tool",
+                    ptr("")
+                ));
+            }
+            "command" if command_name.is_none() => {
+                return Err(format!(
+                    "{}/command_name must be string for kind=command",
+                    ptr("")
+                ));
+            }
+            "provider" if provider_id.is_none() => {
+                return Err(format!(
+                    "{}/provider_id must be string for kind=provider",
+                    ptr("")
+                ));
+            }
+            _ => {}
+        }
+
+        if let Some(input_value) = value.pointer(&ptr("input")) {
+            if !(input_value.is_object() || input_value.is_null()) {
+                return Err(format!("{} must be object or null", ptr("input")));
+            }
+        }
+
+        if let Some(expect_value) = value.pointer(&ptr("expect")) {
+            if !expect_value.is_object() {
+                return Err(format!("{} must be object", ptr("expect")));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_fixture(path: &Path, value: &Value) -> Result<(), String> {
+    let schema = require_str(value, "/schema")?;
+    match schema {
+        EXT_FIXTURE_SCHEMA => validate_legacy_fixture(path, value),
+        EXT_SCENARIO_SCHEMA => validate_scenario_fixture(path, value),
+        _ => Err(format!(
+            "/schema must be {EXT_FIXTURE_SCHEMA} or {EXT_SCENARIO_SCHEMA}, got {schema}"
+        )),
+    }
+}
+
 #[test]
 fn ext_conformance_fixtures_parse_and_match_schema_and_normalization_rules() {
     let harness = TestHarness::new("ext_conformance_fixtures_parse_and_match_schema");
@@ -195,11 +297,11 @@ fn ext_conformance_fixtures_parse_and_match_schema_and_normalization_rules() {
             .pointer("/schema")
             .and_then(Value::as_str)
             .unwrap_or("");
-        if schema != EXT_FIXTURE_SCHEMA {
+        if schema != EXT_FIXTURE_SCHEMA && schema != EXT_SCENARIO_SCHEMA {
             harness.log().debug(
                 "fixture",
                 format!(
-                    "skipping {}: schema {schema} (expected {EXT_FIXTURE_SCHEMA})",
+                    "skipping {}: schema {schema} (expected {EXT_FIXTURE_SCHEMA} or {EXT_SCENARIO_SCHEMA})",
                     path.display()
                 ),
             );
@@ -251,4 +353,32 @@ fn ext_conformance_fixture_validation_rejects_missing_schema() {
     });
     let err = validate_fixture(Path::new("hello.json"), &value).unwrap_err();
     assert!(err.contains("missing /schema"), "unexpected error: {err}");
+}
+
+#[test]
+fn ext_conformance_fixture_validation_rejects_scenario_missing_source_path() {
+    let value = serde_json::json!({
+        "schema": "pi.ext.scenario_fixture.v1",
+        "extension": {"id":"minimal","source": {}},
+        "scenarios": [{"id":"scn-1","kind":"tool","summary":"x","tool_name":"hello"}]
+    });
+    let err = validate_fixture(Path::new("minimal.json"), &value).unwrap_err();
+    assert!(
+        err.contains("missing /extension/source/path"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn ext_conformance_fixture_validation_rejects_scenario_missing_summary() {
+    let value = serde_json::json!({
+        "schema": "pi.ext.scenario_fixture.v1",
+        "extension": {"id":"minimal","source": {"path":"tests/ext_conformance/artifacts/base_fixtures/minimal_tool/index.ts"}},
+        "scenarios": [{"id":"scn-1","kind":"tool","tool_name":"hello"}]
+    });
+    let err = validate_fixture(Path::new("minimal.json"), &value).unwrap_err();
+    assert!(
+        err.contains("missing /scenarios/0/summary"),
+        "unexpected error: {err}"
+    );
 }

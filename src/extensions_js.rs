@@ -3274,7 +3274,7 @@ pub fn build_golden_manifest(
     artifacts: &[(&str, &[u8])],
     timestamp_ms: u64,
 ) -> GoldenChecksumManifest {
-    let entries = artifacts
+    let mut entries: Vec<ChecksumEntry> = artifacts
         .iter()
         .map(|(path, content)| ChecksumEntry {
             relative_path: (*path).to_string(),
@@ -3282,6 +3282,13 @@ pub fn build_golden_manifest(
             size_bytes: content.len() as u64,
         })
         .collect();
+
+    entries.sort_by(|a, b| {
+        a.relative_path
+            .cmp(&b.relative_path)
+            .then_with(|| a.checksum.cmp(&b.checksum))
+            .then_with(|| a.size_bytes.cmp(&b.size_bytes))
+    });
 
     GoldenChecksumManifest {
         extension_id: extension_id.to_string(),
@@ -5679,13 +5686,13 @@ fn compile_module_source(
     }
 
     let compiled = match extension {
-        "ts" | "tsx" => {
+        "ts" | "tsx" | "cts" | "mts" | "jsx" => {
             let transpiled = transpile_typescript_module(&raw, name).map_err(|message| {
                 rquickjs::Error::new_loading_message(name, format!("transpile: {message}"))
             })?;
             rewrite_legacy_private_identifiers(&maybe_cjs_to_esm(&transpiled))
         }
-        "js" | "mjs" => rewrite_legacy_private_identifiers(&maybe_cjs_to_esm(&raw)),
+        "js" | "mjs" | "cjs" => rewrite_legacy_private_identifiers(&maybe_cjs_to_esm(&raw)),
         "json" => json_module_to_esm(&raw, name).map_err(|message| {
             rquickjs::Error::new_loading_message(name, format!("json: {message}"))
         })?,
@@ -6148,8 +6155,12 @@ fn resolve_existing_module_candidate(path: PathBuf) -> Option<PathBuf> {
         for candidate in [
             "index.ts",
             "index.tsx",
+            "index.jsx",
+            "index.cts",
+            "index.mts",
             "index.js",
             "index.mjs",
+            "index.cjs",
             "index.json",
         ] {
             let full = path.join(candidate);
@@ -6162,8 +6173,8 @@ fn resolve_existing_module_candidate(path: PathBuf) -> Option<PathBuf> {
 
     let extension = path.extension().and_then(|ext| ext.to_str());
     match extension {
-        Some("js" | "mjs") => {
-            for ext in ["ts", "tsx"] {
+        Some("js" | "mjs" | "cjs" | "jsx") => {
+            for ext in ["ts", "tsx", "cts", "mts"] {
                 let fallback = path.with_extension(ext);
                 if fallback.is_file() {
                     return Some(fallback);
@@ -6171,7 +6182,7 @@ fn resolve_existing_module_candidate(path: PathBuf) -> Option<PathBuf> {
             }
         }
         None => {
-            for ext in ["ts", "tsx", "js", "mjs", "json"] {
+            for ext in ["ts", "tsx", "jsx", "cts", "mts", "js", "mjs", "cjs", "json"] {
                 let candidate = path.with_extension(ext);
                 if candidate.is_file() {
                     return Some(candidate);
@@ -7018,9 +7029,9 @@ fn transpile_typescript_module(source: &str, name: &str) -> std::result::Result<
         );
 
         let syntax = Syntax::Typescript(TsSyntax {
-            tsx: Path::new(name)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("tsx")),
+            tsx: Path::new(name).extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("tsx") || ext.eq_ignore_ascii_case("jsx")
+            }),
             decorators: true,
             ..Default::default()
         });
@@ -7260,7 +7271,110 @@ export function StringEnum(values, opts = {}) {
   return { type: "string", enum: list, ...opts };
 }
 
-export function calculateCost() {}
+export function calculateCost(model, usage) {
+  const usageObj = usage && typeof usage === 'object' ? usage : {};
+  const cost = usageObj.cost && typeof usageObj.cost === 'object' ? usageObj.cost : {};
+  const modelCost = model && typeof model === 'object' ? (model.cost || {}) : {};
+
+  const inputTokens = Number(usageObj.input ?? usageObj.inputTokens ?? usageObj.input_tokens ?? 0);
+  const outputTokens = Number(usageObj.output ?? usageObj.outputTokens ?? usageObj.output_tokens ?? 0);
+  const cacheReadTokens = Number(usageObj.cacheRead ?? usageObj.cache_read ?? 0);
+  const cacheWriteTokens = Number(usageObj.cacheWrite ?? usageObj.cache_write ?? 0);
+
+  const inputRate = Number(modelCost.input ?? 0);
+  const outputRate = Number(modelCost.output ?? 0);
+  const cacheReadRate = Number(modelCost.cacheRead ?? modelCost.cache_read ?? 0);
+  const cacheWriteRate = Number(modelCost.cacheWrite ?? modelCost.cache_write ?? 0);
+
+  cost.input = (inputRate / 1000000) * inputTokens;
+  cost.output = (outputRate / 1000000) * outputTokens;
+  cost.cacheRead = (cacheReadRate / 1000000) * cacheReadTokens;
+  cost.cacheWrite = (cacheWriteRate / 1000000) * cacheWriteTokens;
+  cost.total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite;
+
+  usageObj.cost = cost;
+  if (!Number.isFinite(Number(usageObj.totalTokens))) {
+    usageObj.totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+  }
+
+  return cost;
+}
+
+function getEnvValue(name) {
+  if (globalThis.pi && globalThis.pi.env && typeof globalThis.pi.env.get === "function") {
+    const value = globalThis.pi.env.get(name);
+    if (value !== undefined && value !== null) {
+      return String(value);
+    }
+  }
+  if (typeof process !== "undefined" && process.env) {
+    return process.env[name];
+  }
+  return undefined;
+}
+
+export function getEnvApiKey(provider) {
+  const p = String(provider ?? "").trim();
+  if (!p) return undefined;
+
+  if (p === "github-copilot") {
+    return (
+      getEnvValue("COPILOT_GITHUB_TOKEN") ||
+      getEnvValue("GH_TOKEN") ||
+      getEnvValue("GITHUB_TOKEN")
+    );
+  }
+
+  if (p === "anthropic") {
+    return getEnvValue("ANTHROPIC_OAUTH_TOKEN") || getEnvValue("ANTHROPIC_API_KEY");
+  }
+
+  if (p === "google-vertex") {
+    const hasCredentials = !!getEnvValue("GOOGLE_APPLICATION_CREDENTIALS");
+    const hasProject = !!(getEnvValue("GOOGLE_CLOUD_PROJECT") || getEnvValue("GCLOUD_PROJECT"));
+    const hasLocation = !!getEnvValue("GOOGLE_CLOUD_LOCATION");
+    if (hasCredentials && (hasProject || hasLocation)) {
+      return "<authenticated>";
+    }
+    if (hasProject && hasLocation) {
+      return "<authenticated>";
+    }
+  }
+
+  if (p === "amazon-bedrock") {
+    if (
+      getEnvValue("AWS_PROFILE") ||
+      (getEnvValue("AWS_ACCESS_KEY_ID") && getEnvValue("AWS_SECRET_ACCESS_KEY")) ||
+      getEnvValue("AWS_BEARER_TOKEN_BEDROCK") ||
+      getEnvValue("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") ||
+      getEnvValue("AWS_CONTAINER_CREDENTIALS_FULL_URI") ||
+      getEnvValue("AWS_WEB_IDENTITY_TOKEN_FILE")
+    ) {
+      return "<authenticated>";
+    }
+  }
+
+  const envMap = {
+    openai: "OPENAI_API_KEY",
+    "azure-openai-responses": "AZURE_OPENAI_API_KEY",
+    google: "GEMINI_API_KEY",
+    groq: "GROQ_API_KEY",
+    cerebras: "CEREBRAS_API_KEY",
+    xai: "XAI_API_KEY",
+    openrouter: "OPENROUTER_API_KEY",
+    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+    zai: "ZAI_API_KEY",
+    mistral: "MISTRAL_API_KEY",
+    minimax: "MINIMAX_API_KEY",
+    "minimax-cn": "MINIMAX_CN_API_KEY",
+    huggingface: "HF_TOKEN",
+    opencode: "OPENCODE_API_KEY",
+    "kimi-coding": "KIMI_API_KEY",
+  };
+
+  const envVar = envMap[p];
+  return envVar ? getEnvValue(envVar) : undefined;
+}
 
 export function createAssistantMessageEventStream() {
   return {
@@ -8281,16 +8395,149 @@ export class SSEClientTransport {
     modules.insert(
         "glob".to_string(),
         r#"
-export function globSync(pattern, _opts = {}) { return []; }
+import "node:fs";
+
+function __pi_glob_vfs() {
+  return globalThis.__pi_vfs_state || null;
+}
+
+function __pi_is_abs(path) {
+  const raw = String(path ?? "");
+  return raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw);
+}
+
+function __pi_normalize(path, cwd) {
+  const vfs = __pi_glob_vfs();
+  const raw = String(path ?? "");
+  if (vfs && typeof vfs.normalizePath === "function") {
+    if (__pi_is_abs(raw)) return vfs.normalizePath(raw);
+    const base =
+      cwd ??
+      (globalThis.process && typeof globalThis.process.cwd === "function"
+        ? globalThis.process.cwd()
+        : "/");
+    return vfs.normalizePath(`${base}/${raw}`);
+  }
+  if (__pi_is_abs(raw)) return raw.replace(/\\/g, "/");
+  const base = String(cwd ?? "/").replace(/\\/g, "/");
+  return `${base.replace(/\/$/, "")}/${raw.replace(/^\//, "")}`;
+}
+
+function __pi_glob_regex(pattern) {
+  let out = "^";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "*") {
+      if (pattern[i + 1] === "*") {
+        while (pattern[i + 1] === "*") i++;
+        if (pattern[i + 1] === "/") {
+          out += "(?:.*/)?";
+          i++;
+        } else {
+          out += ".*";
+        }
+      } else {
+        out += "[^/]*";
+      }
+    } else if (ch === "?") {
+      out += "[^/]";
+    } else if ("\\\\.^$+()[]{}|".includes(ch)) {
+      out += "\\" + ch;
+    } else {
+      out += ch;
+    }
+  }
+  out += "$";
+  return new RegExp(out);
+}
+
+function __pi_make_relative(base, full) {
+  if (!base) return full;
+  if (base === "/") {
+    return full.startsWith("/") ? full.slice(1) : full;
+  }
+  const prefix = base.endsWith("/") ? base : `${base}/`;
+  if (full.startsWith(prefix)) return full.slice(prefix.length);
+  return full;
+}
+
+function __pi_collect(patterns, opts) {
+  const vfs = __pi_glob_vfs();
+  if (!vfs) return [];
+  const cwd = opts && typeof opts.cwd === "string" ? opts.cwd : undefined;
+  const absolute = !!(opts && opts.absolute);
+  const nodir = !!(opts && opts.nodir);
+  const base =
+    vfs && typeof vfs.normalizePath === "function"
+      ? vfs.normalizePath(
+          cwd ??
+            (globalThis.process && typeof globalThis.process.cwd === "function"
+              ? globalThis.process.cwd()
+              : "/"),
+        )
+      : String(cwd ?? "/").replace(/\\/g, "/");
+
+  const results = new Set();
+  for (const rawPattern of patterns) {
+    const normalized = __pi_normalize(rawPattern, cwd);
+    const regex = __pi_glob_regex(normalized);
+    for (const file of vfs.files.keys()) {
+      if (regex.test(file)) results.add(file);
+    }
+    if (!nodir) {
+      for (const dir of vfs.dirs.values()) {
+        if (regex.test(dir)) results.add(dir);
+      }
+      if (vfs.symlinks && typeof vfs.symlinks.keys === "function") {
+        for (const link of vfs.symlinks.keys()) {
+          if (regex.test(link)) results.add(link);
+        }
+      }
+    }
+  }
+
+  const out = Array.from(results);
+  out.sort();
+  if (!absolute) {
+    const allAbsolute = patterns.every((pat) => __pi_is_abs(pat));
+    if (!allAbsolute) {
+      return out.map((path) => __pi_make_relative(base, path));
+    }
+  }
+  return out;
+}
+
+export function globSync(pattern, opts = {}) {
+  const patterns = Array.isArray(pattern) ? pattern : [pattern];
+  return __pi_collect(patterns, opts);
+}
+
 export function glob(pattern, optsOrCb, cb) {
   const callback = typeof optsOrCb === "function" ? optsOrCb : cb;
-  if (typeof callback === "function") callback(null, []);
-  return Promise.resolve([]);
+  const opts = typeof optsOrCb === "object" && optsOrCb ? optsOrCb : {};
+  try {
+    const result = globSync(pattern, opts);
+    if (typeof callback === "function") {
+      callback(null, result);
+      return;
+    }
+    return Promise.resolve(result);
+  } catch (err) {
+    if (typeof callback === "function") {
+      callback(err, []);
+      return;
+    }
+    return Promise.reject(err);
+  }
 }
+
 export class Glob {
-  constructor(_pattern, _opts = {}) { this.found = []; }
+  constructor(pattern, opts = {}) {
+    this.found = globSync(pattern, opts);
+  }
   on() { return this; }
 }
+
 export default { globSync, glob, Glob };
 "#
         .trim()
@@ -16776,7 +17023,7 @@ function __pi_register_mcp_server(name, spec) {
         if (typeof spec.env !== 'object' || Array.isArray(spec.env)) {
             throw new Error('registerMcpServer: spec.env must be an object');
         }
-        env = {};
+        env = Object.create(null);
         for (const [key, value] of Object.entries(spec.env)) {
             env[String(key)] = String(value);
         }
@@ -17875,12 +18122,59 @@ function __pi_make_extension_ctx(ctx_payload) {
 	    return results;
 	}
 
+function __pi_validate_tool_input(schema, input) {
+    if (!schema || typeof schema !== 'object') return;
+    const schemaType = schema.type;
+    const typeList = Array.isArray(schemaType)
+        ? schemaType.filter((value) => typeof value === 'string')
+        : (typeof schemaType === 'string' ? [schemaType] : []);
+    const typeIsObject = typeList.includes('object');
+    const allowsNull = typeList.includes('null');
+    const hasExplicitTypes = schemaType !== undefined && typeList.length > 0;
+    const hasProperties = schema.properties && typeof schema.properties === 'object';
+    const schemaIsObject = schemaType !== undefined ? typeIsObject : hasProperties;
+    if (!schemaIsObject) return;
+    const required = Array.isArray(schema.required)
+        ? schema.required.filter((value) => typeof value === 'string')
+        : [];
+    if (input === undefined) {
+        if (required.length === 0) return;
+        throw new Error(`Tool input missing required fields: ${required.join(', ')}`);
+    }
+    if (input === null) {
+        if (allowsNull) return;
+        throw new Error('Tool input must be an object');
+    }
+    if (typeof input !== 'object' || Array.isArray(input)) {
+        if (hasExplicitTypes) {
+            const inputType = Array.isArray(input) ? 'array' : typeof input;
+            if (typeList.includes(inputType)) return;
+            if (inputType === 'number' && typeList.includes('integer') && Number.isInteger(input)) {
+                return;
+            }
+        }
+        throw new Error('Tool input must be an object');
+    }
+    if (required.length === 0) return;
+    const missing = [];
+    for (const key of required) {
+        if (!Object.prototype.hasOwnProperty.call(input, key) || input[key] === undefined) {
+            missing.push(key);
+        }
+    }
+    if (missing.length > 0) {
+        throw new Error(`Tool input missing required fields: ${missing.join(', ')}`);
+    }
+}
+
 async function __pi_execute_tool(tool_name, tool_call_id, input, ctx_payload) {
     const name = String(tool_name || '').trim();
     const record = __pi_tool_index.get(name);
     if (!record) {
         throw new Error(`Unknown tool: ${name}`);
     }
+
+    __pi_validate_tool_input(record.spec && record.spec.parameters, input);
 
     const ctx = __pi_make_extension_ctx(ctx_payload);
     return __pi_with_extension_async(record.extensionId, () =>
@@ -19319,6 +19613,14 @@ if (typeof globalThis.Bun === 'undefined') {
         const bytes = __pi_bun_to_uint8(payload);
         fs.writeFileSync(targetPath, bytes);
         return bytes.byteLength;
+    };
+
+    Bun.connect = (_options = {}) => {
+        throw new Error('Bun.connect is not available in PiJS');
+    };
+
+    Bun.listen = (_options = {}) => {
+        throw new Error('Bun.listen is not available in PiJS');
     };
 
     Bun.which = (command) => {
@@ -21601,6 +21903,164 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                     .collect::<Vec<_>>(),
                 vec!["a", "b"]
             );
+        });
+    }
+
+    #[test]
+    fn pijs_validate_tool_input_allows_null_when_schema_allows_null() {
+        futures::executor::block_on(async {
+            let runtime = PiJsRuntime::with_clock(DeterministicClock::new(0))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r#"
+                __pi_validate_tool_input({
+                    type: ["object", "null"],
+                    properties: { name: { type: "string" } },
+                    required: ["name"]
+                }, null);
+            "#,
+                )
+                .await
+                .expect("null input should be allowed when schema permits null");
+        });
+    }
+
+    #[test]
+    fn pijs_validate_tool_input_rejects_missing_required_object() {
+        futures::executor::block_on(async {
+            let runtime = PiJsRuntime::with_clock(DeterministicClock::new(0))
+                .await
+                .expect("create runtime");
+
+            let err = runtime
+                .eval(
+                    r#"
+                __pi_validate_tool_input({
+                    type: ["object", "null"],
+                    properties: { name: { type: "string" } },
+                    required: ["name"]
+                }, {});
+            "#,
+                )
+                .await
+                .expect_err("missing required field should throw");
+
+            assert!(err.to_string().contains("missing required"));
+        });
+    }
+
+    #[test]
+    fn pijs_validate_tool_input_rejects_non_object_when_schema_is_object() {
+        futures::executor::block_on(async {
+            let runtime = PiJsRuntime::with_clock(DeterministicClock::new(0))
+                .await
+                .expect("create runtime");
+
+            let err = runtime
+                .eval(
+                    r#"
+                __pi_validate_tool_input({
+                    type: "object",
+                    properties: { name: { type: "string" } }
+                }, "nope");
+            "#,
+                )
+                .await
+                .expect_err("non-object input should throw");
+
+            assert!(err.to_string().contains("Tool input must be an object"));
+        });
+    }
+
+    #[test]
+    fn pijs_validate_tool_input_allows_non_object_when_schema_allows_string() {
+        futures::executor::block_on(async {
+            let runtime = PiJsRuntime::with_clock(DeterministicClock::new(0))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r#"
+                __pi_validate_tool_input({
+                    type: ["object", "string"],
+                    properties: { name: { type: "string" } },
+                    required: ["name"]
+                }, "ok");
+            "#,
+                )
+                .await
+                .expect("string input should be allowed when schema permits string");
+        });
+    }
+
+    #[test]
+    fn pijs_validate_tool_input_rejects_null_when_schema_disallows_null() {
+        futures::executor::block_on(async {
+            let runtime = PiJsRuntime::with_clock(DeterministicClock::new(0))
+                .await
+                .expect("create runtime");
+
+            let err = runtime
+                .eval(
+                    r#"
+                __pi_validate_tool_input({
+                    type: ["object", "string"],
+                    properties: { name: { type: "string" } }
+                }, null);
+            "#,
+                )
+                .await
+                .expect_err("null input should be rejected when schema disallows null");
+
+            assert!(err.to_string().contains("Tool input must be an object"));
+        });
+    }
+
+    #[test]
+    fn pijs_validate_tool_input_rejects_number_when_schema_only_string() {
+        futures::executor::block_on(async {
+            let runtime = PiJsRuntime::with_clock(DeterministicClock::new(0))
+                .await
+                .expect("create runtime");
+
+            let err = runtime
+                .eval(
+                    r#"
+                __pi_validate_tool_input({
+                    type: ["object", "string"],
+                    properties: { name: { type: "string" } }
+                }, 42);
+            "#,
+                )
+                .await
+                .expect_err("number input should be rejected when schema allows only string");
+
+            assert!(err.to_string().contains("Tool input must be an object"));
+        });
+    }
+
+    #[test]
+    fn pijs_validate_tool_input_allows_undefined_when_no_required() {
+        futures::executor::block_on(async {
+            let runtime = PiJsRuntime::with_clock(DeterministicClock::new(0))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r#"
+                __pi_validate_tool_input({
+                    type: "object",
+                    properties: { name: { type: "string" } }
+                }, undefined);
+            "#,
+                )
+                .await
+                .expect("undefined input should be allowed when no required fields");
         });
     }
 
@@ -25060,6 +25520,96 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert_eq!(r["netThrew"], serde_json::json!(true));
             assert_eq!(r["httpThrew"], serde_json::json!(true));
             assert_eq!(r["httpsThrew"], serde_json::json!(true));
+        });
+    }
+
+    #[test]
+    fn pijs_glob_sync_matches_vfs() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r"
+                    globalThis.globResult = {};
+                    (async () => {
+                        const fs = await import('node:fs');
+                        fs.mkdirSync('/glob');
+                        fs.writeFileSync('/glob/a.txt', 'a');
+                        fs.writeFileSync('/glob/b.md', 'b');
+                        fs.mkdirSync('/glob/sub');
+                        fs.writeFileSync('/glob/sub/c.txt', 'c');
+
+                        const glob = await import('glob');
+                        globalThis.globResult.txt = glob.globSync('/glob/**/*.txt');
+                        globalThis.globResult.md = glob.globSync('/glob/*.md');
+                        globalThis.globResult.rel = glob.globSync('glob/*.md', { cwd: '/' });
+                        globalThis.globResult.done = true;
+                    })();
+                    ",
+                )
+                .await
+                .expect("eval glob");
+
+            drain_until_idle(&runtime, &clock).await;
+
+            let r = get_global_json(&runtime, "globResult").await;
+            assert_eq!(r["done"], serde_json::json!(true));
+            assert_eq!(
+                r["txt"],
+                serde_json::json!(["/glob/a.txt", "/glob/sub/c.txt"])
+            );
+            assert_eq!(r["md"], serde_json::json!(["/glob/b.md"]));
+            assert_eq!(r["rel"], serde_json::json!(["glob/b.md"]));
+        });
+    }
+
+    #[test]
+    fn pijs_calculate_cost_updates_usage() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r"
+                    globalThis.costResult = {};
+                    (async () => {
+                        const ai = await import('@mariozechner/pi-ai');
+                        const model = { cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 } };
+                        const usage = {
+                            input: 1000,
+                            output: 2000,
+                            cacheRead: 500,
+                            cacheWrite: 250,
+                            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                        };
+                        const cost = ai.calculateCost(model, usage);
+                        globalThis.costResult = { cost, usage, done: true };
+                    })();
+                    ",
+                )
+                .await
+                .expect("eval cost");
+
+            drain_until_idle(&runtime, &clock).await;
+
+            let r = get_global_json(&runtime, "costResult").await;
+            assert_eq!(r["done"], serde_json::json!(true));
+            let total_tokens = r["usage"]["totalTokens"].as_u64().unwrap_or_default();
+            assert_eq!(total_tokens, 3750);
+
+            let total_cost = r["cost"]["total"].as_f64().unwrap_or_default();
+            assert!((total_cost - 0.01125).abs() < 1e-9);
+            let input_cost = r["cost"]["input"].as_f64().unwrap_or_default();
+            assert!((input_cost - 0.002).abs() < 1e-9);
+            let output_cost = r["cost"]["output"].as_f64().unwrap_or_default();
+            assert!((output_cost - 0.008).abs() < 1e-9);
         });
     }
 

@@ -17,6 +17,10 @@ use pi::extensions::{
     JsExtensionLoadSpec, JsExtensionRuntimeHandle,
 };
 use pi::extensions_js::{HostcallKind, HostcallRequest, PiJsRuntimeConfig};
+use pi::resources::{
+    load_prompt_templates, load_skills, load_themes, LoadPromptTemplatesOptions,
+    LoadSkillsOptions, LoadThemesOptions,
+};
 use pi::scheduler::HostcallOutcome;
 use pi::session::SessionMessage;
 use pi::tools::ToolRegistry;
@@ -258,6 +262,23 @@ struct SampleItem {
     runtime_tier: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ScenarioFixture {
+    extension: ScenarioFixtureExtension,
+    scenarios: Vec<Scenario>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ScenarioFixtureExtension {
+    id: String,
+    source: ScenarioFixtureSource,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ScenarioFixtureSource {
+    path: String,
+}
+
 // ─── Scenario result types ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -423,6 +444,10 @@ fn finalize_scenario_result(mut result: ScenarioResult) -> ScenarioResult {
 
 // ─── Extension loader ───────────────────────────────────────────────────────
 
+const SCENARIO_ENTRY_EXTS: &[&str] = &[
+    "ts", "tsx", "jsx", "js", "mjs", "cjs", "mts", "cts",
+];
+
 /// Resolve the artifact path for an extension ID.
 fn resolve_extension_path(extension_id: &str, items: &[SampleItem]) -> Option<PathBuf> {
     let item = items.iter().find(|i| i.id == extension_id)?;
@@ -430,11 +455,13 @@ fn resolve_extension_path(extension_id: &str, items: &[SampleItem]) -> Option<Pa
     let trimmed = name.trim_end_matches('/');
     let dir = artifacts_dir().join(trimmed);
 
-    // Multi-file extensions (name ends with '/'): look for index.ts
+    // Multi-file extensions (name ends with '/'): look for index.<ext>
     if name.ends_with('/') {
-        let index = dir.join("index.ts");
-        if index.exists() {
-            return Some(index);
+        for ext in SCENARIO_ENTRY_EXTS {
+            let index = dir.join(format!("index.{ext}"));
+            if index.exists() {
+                return Some(index);
+            }
         }
     }
 
@@ -538,6 +565,118 @@ fn build_ctx_payload(settings: &DeterministicSettings, scenario_input: Option<&V
         "sessionLeafEntry": null,
         "modelRegistry": {},
     })
+}
+
+fn extension_root_from_path(extension_path: &Path) -> PathBuf {
+    if extension_path.is_file() {
+        extension_path
+            .parent()
+            .unwrap_or(extension_path)
+            .to_path_buf()
+    } else {
+        extension_path.to_path_buf()
+    }
+}
+
+fn relative_paths(root: &Path, paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .map(|path| {
+            path.strip_prefix(root)
+                .unwrap_or(&path)
+                .to_path_buf()
+        })
+        .collect()
+}
+
+fn sorted_path_strings(mut paths: Vec<PathBuf>) -> Vec<String> {
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect()
+}
+
+fn discover_template_paths(extension_root: &Path) -> Vec<PathBuf> {
+    let templates_dir = extension_root.join("templates");
+    let mut paths = Vec::new();
+    let Ok(entries) = fs::read_dir(&templates_dir) else {
+        return paths;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths
+}
+
+fn execute_resource_discovery_scenario(extension_path: &Path) -> Result<Value, String> {
+    let extension_root = extension_root_from_path(extension_path);
+    let prompt_dir = extension_root.join("prompts");
+    let skill_dir = extension_root.join("skills");
+    let theme_dir = extension_root.join("themes");
+
+    let prompt_templates = load_prompt_templates(LoadPromptTemplatesOptions {
+        cwd: extension_root.clone(),
+        agent_dir: extension_root.clone(),
+        prompt_paths: vec![prompt_dir],
+        include_defaults: false,
+    });
+
+    let skills = load_skills(LoadSkillsOptions {
+        cwd: extension_root.clone(),
+        agent_dir: extension_root.clone(),
+        skill_paths: vec![skill_dir],
+        include_defaults: false,
+    });
+
+    let themes = load_themes(LoadThemesOptions {
+        cwd: extension_root.clone(),
+        agent_dir: extension_root.clone(),
+        theme_paths: vec![theme_dir],
+        include_defaults: false,
+    });
+
+    let prompt_paths = relative_paths(
+        &extension_root,
+        prompt_templates
+            .iter()
+            .map(|p| p.file_path.clone())
+            .collect(),
+    );
+    let skill_paths = relative_paths(
+        &extension_root,
+        skills.skills.iter().map(|s| s.file_path.clone()).collect(),
+    );
+    let theme_paths = relative_paths(
+        &extension_root,
+        themes.themes.iter().map(|t| t.file_path.clone()).collect(),
+    );
+    let template_paths = relative_paths(
+        &extension_root,
+        discover_template_paths(&extension_root),
+    );
+
+    Ok(serde_json::json!({
+        "promptPaths": sorted_path_strings(prompt_paths),
+        "skillPaths": sorted_path_strings(skill_paths),
+        "themePaths": sorted_path_strings(theme_paths),
+        "templatePaths": sorted_path_strings(template_paths),
+    }))
+}
+
+fn execute_template_scenario(extension_path: &Path) -> Result<Value, String> {
+    let extension_root = extension_root_from_path(extension_path);
+    let template_paths = relative_paths(
+        &extension_root,
+        discover_template_paths(&extension_root),
+    );
+    Ok(serde_json::json!({
+        "templatePaths": sorted_path_strings(template_paths),
+    }))
 }
 
 /// Execute a tool scenario: call the tool and check expectations.
@@ -1256,15 +1395,57 @@ fn json_contains_inner(actual: &Value, expected: &Value, key: Option<&str>) -> b
                     .is_some_and(|av| json_contains_inner(av, v, Some(k)))
             })
         }
-        (Value::Array(actual_arr), Value::Array(expected_arr)) => expected_arr
-            .iter()
-            .all(|ev| actual_arr.iter().any(|av| json_contains_inner(av, ev, key))),
+        (Value::Array(actual_arr), Value::Array(expected_arr)) => {
+            json_contains_array(actual_arr, expected_arr, key)
+        }
         // Path-typed string comparison: suffix match (bd-k5q5.1.2)
         (Value::String(actual_s), Value::String(expected_s)) if key.is_some_and(is_path_key) => {
             path_suffix_match(actual_s, expected_s)
         }
         _ => actual == expected,
     }
+}
+
+fn json_contains_array(actual_arr: &[Value], expected_arr: &[Value], key: Option<&str>) -> bool {
+    if actual_arr.len() < expected_arr.len() {
+        return false;
+    }
+    let mut candidates: Vec<Vec<usize>> = Vec::with_capacity(expected_arr.len());
+    for expected in expected_arr {
+        let mut matches = Vec::new();
+        for (idx, actual) in actual_arr.iter().enumerate() {
+            if json_contains_inner(actual, expected, key) {
+                matches.push(idx);
+            }
+        }
+        if matches.is_empty() {
+            return false;
+        }
+        candidates.push(matches);
+    }
+    let mut used = vec![false; actual_arr.len()];
+    json_contains_backtrack(0, &candidates, &mut used)
+}
+
+fn json_contains_backtrack(
+    expected_idx: usize,
+    candidates: &[Vec<usize>],
+    used: &mut [bool],
+) -> bool {
+    if expected_idx == candidates.len() {
+        return true;
+    }
+    for &candidate in &candidates[expected_idx] {
+        if used[candidate] {
+            continue;
+        }
+        used[candidate] = true;
+        if json_contains_backtrack(expected_idx + 1, candidates, used) {
+            return true;
+        }
+        used[candidate] = false;
+    }
+    false
 }
 
 // ─── Mock Infrastructure ─────────────────────────────────────────────────────
@@ -2469,6 +2650,8 @@ fn run_scenario(
         }
         "command" => execute_command_scenario(&loaded, scenario, &ext_path),
         "event" => execute_event_scenario(&loaded, scenario, &ext_path),
+        "resource_discovery" => execute_resource_discovery_scenario(&ext_path),
+        "template" => execute_template_scenario(&ext_path),
         "mcp" => execute_mcp_scenario(
             &loaded.runtime,
             &loaded.manager,
@@ -2631,6 +2814,8 @@ fn run_scenario_with_mocks(
         }
         "command" => execute_command_scenario_with_mocks(&loaded, scenario, ext_path),
         "event" => execute_event_scenario_with_mocks(&loaded, scenario, ext_path),
+        "resource_discovery" => execute_resource_discovery_scenario(ext_path),
+        "template" => execute_template_scenario(ext_path),
         "mcp" => execute_mcp_scenario(
             &loaded.runtime,
             &loaded.manager,
@@ -2903,6 +3088,41 @@ fn load_sample_json() -> SampleJson {
     serde_json::from_str(&data).expect("parse extension-sample.json")
 }
 
+fn scenario_fixture_path(name: &str) -> PathBuf {
+    project_root()
+        .join("tests/ext_conformance/fixtures")
+        .join(format!("{name}.json"))
+}
+
+fn sample_item_name_from_source(source_path: &str) -> String {
+    let prefix = "tests/ext_conformance/artifacts/";
+    source_path
+        .strip_prefix(prefix)
+        .unwrap_or(source_path)
+        .to_string()
+}
+
+fn load_scenario_fixture(name: &str) -> (ScenarioExtension, Vec<SampleItem>) {
+    let path = scenario_fixture_path(name);
+    let content = fs::read_to_string(&path).expect("read scenario fixture");
+    let fixture: ScenarioFixture = serde_json::from_str(&content).expect("parse scenario fixture");
+
+    let extension_id = fixture.extension.id.clone();
+    let extension = ScenarioExtension {
+        extension_id: extension_id.clone(),
+        features: Vec::new(),
+        scenarios: fixture.scenarios,
+    };
+    let item = SampleItem {
+        id: extension_id,
+        name: sample_item_name_from_source(&fixture.extension.source.path),
+        source_tier: "fixture".to_string(),
+        runtime_tier: "legacy-js".to_string(),
+    };
+
+    (extension, vec![item])
+}
+
 #[test]
 fn parse_scenario_shard_accepts_valid_values() {
     let parsed = parse_scenario_shard(Some("1"), Some("4"), Some("matrix-a"))
@@ -2933,6 +3153,41 @@ fn classify_scenario_failure_categories_are_stable() {
     );
 
     assert_eq!(classify_scenario_failure("pass", &[], None), None);
+}
+
+#[test]
+fn json_contains_array_requires_distinct_matches() {
+    let expected = serde_json::json!({
+        "items": [
+            {"id": 1},
+            {"id": 1, "tag": "a"}
+        ]
+    });
+    let actual = serde_json::json!({
+        "items": [
+            {"id": 1, "tag": "a"}
+        ]
+    });
+
+    assert!(!json_contains(&actual, &expected));
+}
+
+#[test]
+fn json_contains_array_accepts_distinct_candidates() {
+    let expected = serde_json::json!({
+        "items": [
+            {"id": 1},
+            {"id": 1, "tag": "a"}
+        ]
+    });
+    let actual = serde_json::json!({
+        "items": [
+            {"id": 1, "tag": "a"},
+            {"id": 1, "tag": "b"}
+        ]
+    });
+
+    assert!(json_contains(&actual, &expected));
 }
 
 /// Run all scenarios from extension-sample.json.
@@ -3290,6 +3545,78 @@ fn scenario_sandbox_tool_registered() {
         result.status, "pass",
         "sandbox tool registration scenario failed: {:?}",
         result.diffs
+    );
+}
+
+/// Focused test: minimal tool fixture should error on missing required fields.
+#[test]
+fn scenario_minimal_tool_missing_required_args() {
+    let (ext, items) = load_scenario_fixture("minimal_tool");
+    let scenario = ext
+        .scenarios
+        .iter()
+        .find(|s| s.id == "scn-minimal-tool-neg-001")
+        .expect("scn-minimal-tool-neg-001");
+
+    let result = run_scenario(&ext, scenario, &items);
+    assert_eq!(
+        result.status, "pass",
+        "minimal tool negative scenario failed: diffs={:?} error={:?} skip={:?}",
+        result.diffs, result.error, result.skip_reason
+    );
+}
+
+/// Focused test: minimal MCP fixture registers an MCP server.
+#[test]
+fn scenario_minimal_mcp_registers_server() {
+    let (ext, items) = load_scenario_fixture("minimal_mcp");
+    let scenario = ext
+        .scenarios
+        .iter()
+        .find(|s| s.id == "scn-minimal-mcp-001")
+        .expect("scn-minimal-mcp-001");
+
+    let result = run_scenario(&ext, scenario, &items);
+    assert_eq!(
+        result.status, "pass",
+        "minimal MCP scenario failed: diffs={:?} error={:?} skip={:?}",
+        result.diffs, result.error, result.skip_reason
+    );
+}
+
+/// Focused test: minimal resources fixture discovers prompt/skill paths.
+#[test]
+fn scenario_minimal_resources_discovers_assets() {
+    let (ext, items) = load_scenario_fixture("minimal_resources");
+    let scenario = ext
+        .scenarios
+        .iter()
+        .find(|s| s.id == "scn-minimal-resources-001")
+        .expect("scn-minimal-resources-001");
+
+    let result = run_scenario(&ext, scenario, &items);
+    assert_eq!(
+        result.status, "pass",
+        "minimal resources scenario failed: diffs={:?} error={:?} skip={:?}",
+        result.diffs, result.error, result.skip_reason
+    );
+}
+
+/// Focused test: minimal template fixture discovers template path.
+#[test]
+fn scenario_minimal_template_discovers_pack() {
+    let (ext, items) = load_scenario_fixture("minimal_template");
+    let scenario = ext
+        .scenarios
+        .iter()
+        .find(|s| s.id == "scn-minimal-template-001")
+        .expect("scn-minimal-template-001");
+
+    let result = run_scenario(&ext, scenario, &items);
+    assert_eq!(
+        result.status, "pass",
+        "minimal template scenario failed: diffs={:?} error={:?} skip={:?}",
+        result.diffs, result.error, result.skip_reason
     );
 }
 

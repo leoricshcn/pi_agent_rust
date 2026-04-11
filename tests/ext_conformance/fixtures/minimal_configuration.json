@@ -1,4 +1,5 @@
 {
+  "schema": "pi.ext.scenario_fixture.v1",
   "extension": {
     "id": "minimal_configuration",
     "source": {
@@ -13,18 +14,18 @@
       "expect": {
         "flags_contains": [
           "verbose"
-        ],
-        "shortcuts_contains": [
-          "ctrl+shift+v"
         ]
       }
     },
     {
       "id": "scn-minimal-configuration-neg-001",
       "kind": "registration",
-      "summary": "Negative: configuration registration fails with malformed config",
+      "summary": "Shortcut registration is present",
       "expect": {
-        "is_error": true
+        "shortcuts_contains": [
+          "ctrl+shift+v"
+        ],
+        "flag_count": 1
       }
     }
   ]

@@ -1639,12 +1639,8 @@ pub async fn create_agent_session(options: SessionOptions) -> Result<AgentSessio
     let provider = providers::create_provider(&selection.model_entry, None)
         .map_err(|e| Error::provider("sdk", e.to_string()))?;
 
-    let api_key = auth
-        .resolve_api_key(
-            &selection.model_entry.model.provider,
-            cli.api_key.as_deref(),
-        )
-        .or_else(|| selection.model_entry.api_key.clone());
+    let api_key = app::resolve_api_key(&auth, &cli, &selection.model_entry)
+        .map_err(|err| Error::validation(err.to_string()))?;
 
     let stream_options =
         build_stream_options_with_optional_key(&config, api_key, &selection, &session);

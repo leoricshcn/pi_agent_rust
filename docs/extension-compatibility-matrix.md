@@ -118,12 +118,12 @@ for optional features.
 | `diff` | Functional | `createTwoFilesPatch`, `createPatch`, `diffLines`, `diffChars`, `diffWords` |
 | `dotenv` | Functional | `config(opts)`, `parse(src)` |
 | `ms` | Functional | Duration parsing (`ms("2h")` -> `7200000`) |
+| `glob` | Partial | `globSync`, `glob`, `Glob` class (basic `*`, `?`, `**` over VFS-known files) |
 
 ### No-op Stubs (Extension Loads, Feature Unavailable)
 
 | Package | Stubbed APIs | Reason |
 |---------|-------------|--------|
-| `glob` | `globSync`, `glob`, `Glob` class | Filesystem globbing not available in sandbox |
 | `chalk` | Passthrough (no color) | Terminal colors not applicable in QuickJS |
 | `chokidar` | `watch()` returns no-op | File watching not available |
 | `jsdom` | `JSDOM` class (empty) | DOM not available |
@@ -176,7 +176,7 @@ The Pi SDK virtual module provides the primary extension API surface.
 | Export | Type | Description |
 |--------|------|-------------|
 | `StringEnum(values)` | Function | Enum type builder |
-| `calculateCost()` | Function | Token cost calculation (stub) |
+| `calculateCost()` | Function | Token cost calculation (uses `model.cost` × usage tokens) |
 | `complete(model, messages, opts)` | Function | LLM completion |
 | `completeSimple(model, prompt, opts)` | Function | Simple completion |
 | `streamSimpleAnthropic()` | Function | Anthropic streaming (stub) |

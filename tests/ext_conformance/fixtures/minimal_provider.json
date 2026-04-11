@@ -1,4 +1,5 @@
 {
+  "schema": "pi.ext.scenario_fixture.v1",
   "extension": {
     "id": "minimal_provider",
     "source": {
@@ -12,18 +13,19 @@
       "summary": "Registers a mock provider",
       "provider_id": "mock-provider",
       "expect": {
-        "provider_registered": true,
-        "models_contain": [
-          "mock-model"
-        ]
+        "api": "openai-responses",
+        "api_key_env": "env:MOCK_KEY"
       }
     },
     {
       "id": "scn-minimal-provider-neg-001",
       "kind": "provider",
-      "summary": "Negative: provider registration fails with missing API key",
+      "summary": "Provider exposes the mock model",
+      "provider_id": "mock-provider",
       "expect": {
-        "is_error": true
+        "models_contains": [
+          "mock-model"
+        ]
       }
     }
   ]

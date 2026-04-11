@@ -19,13 +19,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const SUPPORTED_EXTS: &[&str] = &["ts", "tsx", "js", "mjs", "cjs"];
+const SUPPORTED_EXTS: &[&str] = &["ts", "tsx", "jsx", "js", "mjs", "cjs", "mts", "cts"];
 
 #[derive(Parser, Debug)]
 #[command(name = "ext_unvendored_fetch_run")]
@@ -739,9 +739,10 @@ fn fetch_candidate_source(
                 github_repo_slug_from_url(repo).unwrap_or_else(|| sanitize_for_fs(repo));
             let (state, root) = fetch_github_repo(shared, repo, &repo_slug)?;
             if let Some(rel) = path {
-                let adjusted = root.join(rel);
-                if adjusted.exists() {
-                    return Ok((state, adjusted));
+                if let Some(adjusted) = resolve_candidate_subpath(&root, rel) {
+                    if adjusted.exists() {
+                        return Ok((state, adjusted));
+                    }
                 }
             }
             Ok((state, root))
@@ -1111,7 +1112,12 @@ fn normalize_clone_url(url: &str) -> String {
     } else if trimmed.starts_with("git@") {
         trimmed.to_string()
     } else {
-        let as_https = format!("https://{}", trimmed.trim_start_matches("github.com/"));
+        let host_hint = trimmed.split('/').next().unwrap_or_default();
+        let as_https = if host_hint.contains('.') {
+            format!("https://{trimmed}")
+        } else {
+            format!("https://github.com/{trimmed}")
+        };
         if has_git_extension_case_insensitive(&as_https) {
             as_https
         } else {
@@ -1140,6 +1146,20 @@ fn sanitize_for_fs(input: &str) -> String {
         out = out.replace("__", "_");
     }
     out.trim_matches('_').to_string()
+}
+
+fn resolve_candidate_subpath(root: &Path, rel: &str) -> Option<PathBuf> {
+    let rel_path = Path::new(rel);
+    if rel_path.is_absolute() {
+        return None;
+    }
+    for comp in rel_path.components() {
+        match comp {
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+            Component::CurDir | Component::Normal(_) => {}
+        }
+    }
+    Some(root.join(rel_path))
 }
 
 #[derive(Debug)]

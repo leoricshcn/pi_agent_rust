@@ -106,7 +106,7 @@ Selection pipeline:
 4. A concrete provider implementation is created in `create_provider(...)`.
 
 Important caveat:
-- `github-copilot` currently reads `GITHUB_COPILOT_API_KEY` / `GITHUB_TOKEN` directly in `create_provider(...)`. For Copilot, setting only `models.json` `apiKey` is not sufficient.
+- `github-copilot` resolves credentials from the model entry `api_key` (populated from `auth.json` or `models.json` provider `apiKey`) and then falls back to `GITHUB_COPILOT_API_KEY` / `GITHUB_TOKEN`. Ensure one of those sources is configured.
 
 ## Provider family map
 
@@ -608,8 +608,11 @@ SAP AI Core auth:
 
 ## OAuth and login caveat
 
-Interactive slash help currently advertises `/login` as Anthropic-first (`../src/interactive.rs`).
-For non-Anthropic providers, prefer explicit env/auth.json setup unless extension/provider-specific OAuth wiring is confirmed in your target flow.
+Interactive slash help now reflects the broader `/login` surface:
+- Built-in OAuth providers: `anthropic`, `openai-codex`, `google-gemini-cli`, `google-antigravity`, `kimi-for-coding`, `github-copilot`, `gitlab`.
+- Metadata-backed API key prompts are available for providers that support interactive API-key login.
+
+For providers without a built-in OAuth flow or API-key prompt, prefer explicit env/auth.json setup. Extension providers require an `oauth_config` entry to enable `/login`.
 
 ## Mandatory test and logging obligations
 

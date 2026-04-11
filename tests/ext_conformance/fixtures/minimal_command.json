@@ -1,4 +1,5 @@
 {
+  "schema": "pi.ext.scenario_fixture.v1",
   "extension": {
     "id": "minimal_command",
     "source": {
@@ -23,7 +24,8 @@
     {
       "id": "scn-minimal-command-neg-001",
       "kind": "command",
-      "summary": "Negative: command fails with invalid arguments",
+      "summary": "Command fails for an unknown command name",
+      "command_name": "missing-command",
       "expect": {
         "is_error": true
       }

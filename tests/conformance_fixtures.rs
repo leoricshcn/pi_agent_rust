@@ -3,6 +3,8 @@
 //! This test module runs all fixture-based conformance tests to ensure
 //! the Rust implementation matches the TypeScript reference.
 
+#![recursion_limit = "256"]
+
 #[path = "conformance/mod.rs"]
 mod conformance;
 

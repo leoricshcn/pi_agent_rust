@@ -237,16 +237,31 @@ fn compare_string_set(
     let expected_items = value_as_array_or_empty(expected, path, diffs, DiffKind::Registration);
     let actual_items = value_as_array_or_empty(actual, path, diffs, DiffKind::Registration);
 
-    let expected_set = expected_items
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>();
-    let actual_set = actual_items
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>();
+    let mut expected_set = BTreeSet::new();
+    for (idx, item) in expected_items.iter().enumerate() {
+        if let Some(value) = item.as_str() {
+            expected_set.insert(value.to_string());
+        } else {
+            diffs.push(DiffItem::new(
+                DiffKind::Registration,
+                format!("{path}[expected:{idx}]"),
+                format!("expected string, got {}", json_type_name(item)),
+            ));
+        }
+    }
+
+    let mut actual_set = BTreeSet::new();
+    for (idx, item) in actual_items.iter().enumerate() {
+        if let Some(value) = item.as_str() {
+            actual_set.insert(value.to_string());
+        } else {
+            diffs.push(DiffItem::new(
+                DiffKind::Registration,
+                format!("{path}[actual:{idx}]"),
+                format!("expected string, got {}", json_type_name(item)),
+            ));
+        }
+    }
 
     if expected_set == actual_set {
         return;
@@ -2930,6 +2945,47 @@ mod tests {
     }
 
     #[test]
+    fn input_array_order_does_not_matter() {
+        let expected = json!({
+            "extension_id": "ext",
+            "name": "Ext",
+            "version": "1.0.0",
+            "registrations": {
+                "commands": [],
+                "shortcuts": [],
+                "flags": [],
+                "providers": [],
+                "tool_defs": [
+                    { "name": "t", "parameters": { "input": ["b", "a", "c"] } }
+                ],
+                "models": [],
+                "event_hooks": []
+            },
+            "hostcall_log": []
+        });
+
+        let actual = json!({
+            "extension_id": "ext",
+            "name": "Ext",
+            "version": "1.0.0",
+            "registrations": {
+                "commands": [],
+                "shortcuts": [],
+                "flags": [],
+                "providers": [],
+                "tool_defs": [
+                    { "name": "t", "parameters": { "input": ["c", "b", "a"] } }
+                ],
+                "models": [],
+                "event_hooks": []
+            },
+            "hostcall_log": []
+        });
+
+        compare_conformance_output(&expected, &actual).unwrap();
+    }
+
+    #[test]
     fn conformance_report_summarizes_and_renders_markdown() {
         let results = vec![
             ExtensionConformanceResult {
@@ -3540,6 +3596,56 @@ mod tests {
         assert!(
             err.contains("on_message") || err.contains("on_session"),
             "should report hook difference: {err}"
+        );
+    }
+
+    #[test]
+    fn compare_event_hooks_rejects_non_string_expected_items() {
+        let expected = base_output(
+            json!({
+                "commands": [], "shortcuts": [], "flags": [],
+                "providers": [], "tool_defs": [], "models": [],
+                "event_hooks": ["on_tool", 42]
+            }),
+            json!([]),
+        );
+        let actual = base_output(
+            json!({
+                "commands": [], "shortcuts": [], "flags": [],
+                "providers": [], "tool_defs": [], "models": [],
+                "event_hooks": ["on_tool"]
+            }),
+            json!([]),
+        );
+        let err = compare_conformance_output(&expected, &actual).unwrap_err();
+        assert!(
+            err.contains("expected string") && err.contains("number"),
+            "should report non-string expected hook item: {err}"
+        );
+    }
+
+    #[test]
+    fn compare_event_hooks_rejects_non_string_actual_items() {
+        let expected = base_output(
+            json!({
+                "commands": [], "shortcuts": [], "flags": [],
+                "providers": [], "tool_defs": [], "models": [],
+                "event_hooks": ["on_tool"]
+            }),
+            json!([]),
+        );
+        let actual = base_output(
+            json!({
+                "commands": [], "shortcuts": [], "flags": [],
+                "providers": [], "tool_defs": [], "models": [],
+                "event_hooks": ["on_tool", null]
+            }),
+            json!([]),
+        );
+        let err = compare_conformance_output(&expected, &actual).unwrap_err();
+        assert!(
+            err.contains("expected string") && err.contains("null"),
+            "should report non-string actual hook item: {err}"
         );
     }
 

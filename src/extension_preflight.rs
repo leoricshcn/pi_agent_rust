@@ -390,6 +390,9 @@ pub fn known_module_support(specifier: &str) -> Option<ModuleSupport> {
         // Known npm packages with real shims
         "@sinclair/typebox" | "zod" => Some(ModuleSupport::Real),
 
+        // Known npm packages with partial shims
+        "glob" => Some(ModuleSupport::Partial),
+
         // Known npm packages with stubs
         "chokidar" | "jsdom" | "turndown" | "beautiful-mermaid" | "node-pty" | "ws" | "axios" => {
             Some(ModuleSupport::Stub)
@@ -2989,6 +2992,11 @@ mod tests {
             Some(ModuleSupport::Partial)
         );
         assert_eq!(known_module_support("test"), Some(ModuleSupport::Partial));
+    }
+
+    #[test]
+    fn known_modules_glob_partial() {
+        assert_eq!(known_module_support("glob"), Some(ModuleSupport::Partial));
     }
 
     #[test]

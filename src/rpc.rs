@@ -101,6 +101,12 @@ impl RpcStateSnapshot {
 
 use crate::config::parse_queue_mode;
 
+fn streaming_behavior_value(parsed: &Value) -> Option<&Value> {
+    parsed
+        .get("streamingBehavior")
+        .or_else(|| parsed.get("streaming_behavior"))
+}
+
 fn parse_streaming_behavior(value: Option<&Value>) -> Result<Option<StreamingBehavior>> {
     let Some(value) = value else {
         return Ok(None);
@@ -110,7 +116,7 @@ fn parse_streaming_behavior(value: Option<&Value>) -> Result<Option<StreamingBeh
     };
     match s {
         "steer" => Ok(Some(StreamingBehavior::Steer)),
-        "follow-up" | "followUp" => Ok(Some(StreamingBehavior::FollowUp)),
+        "follow-up" | "followUp" | "follow_up" => Ok(Some(StreamingBehavior::FollowUp)),
         _ => Err(Error::validation(format!("Invalid streamingBehavior: {s}"))),
     }
 }
@@ -590,7 +596,7 @@ pub async fn run(
                 };
 
                 let streaming_behavior =
-                    match parse_streaming_behavior(parsed.get("streamingBehavior")) {
+                    match parse_streaming_behavior(streaming_behavior_value(&parsed)) {
                         Ok(value) => value,
                         Err(err) => {
                             let resp = response_error_with_hints(id, "prompt", &err);
@@ -5493,6 +5499,13 @@ export default function init(pi) {
     }
 
     #[test]
+    fn parse_streaming_behavior_follow_up_snake() {
+        let val = json!("follow_up");
+        let result = parse_streaming_behavior(Some(&val)).unwrap();
+        assert_eq!(result, Some(StreamingBehavior::FollowUp));
+    }
+
+    #[test]
     fn parse_streaming_behavior_none() {
         let result = parse_streaming_behavior(None).unwrap();
         assert_eq!(result, None);
@@ -5508,6 +5521,14 @@ export default function init(pi) {
     fn parse_streaming_behavior_non_string_errors() {
         let val = json!(42);
         assert!(parse_streaming_behavior(Some(&val)).is_err());
+    }
+
+    #[test]
+    fn streaming_behavior_field_accepts_snake_case_key() {
+        let payload = json!({ "streaming_behavior": "follow_up" });
+        let value = streaming_behavior_value(&payload).expect("streaming behavior value");
+        let result = parse_streaming_behavior(Some(value)).unwrap();
+        assert_eq!(result, Some(StreamingBehavior::FollowUp));
     }
 
     // -----------------------------------------------------------------------

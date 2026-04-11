@@ -1079,6 +1079,30 @@ mod tests {
     }
 
     #[test]
+    fn extension_flag_inline_value_matches_separate_value() {
+        let separate = parse_with_extension_flags(vec![
+            "pi".to_string(),
+            "--plan".to_string(),
+            "ship-it".to_string(),
+            "--print".to_string(),
+            "hello".to_string(),
+        ])
+        .expect("parse separate extension flag");
+
+        let inline = parse_with_extension_flags(vec![
+            "pi".to_string(),
+            "--plan=ship-it".to_string(),
+            "--print".to_string(),
+            "hello".to_string(),
+        ])
+        .expect("parse inline extension flag");
+
+        assert_eq!(separate.cli.print, inline.cli.print);
+        assert_eq!(separate.cli.message_args(), inline.cli.message_args());
+        assert_eq!(separate.extension_flags, inline.extension_flags);
+    }
+
+    #[test]
     fn root_subcommands_constant_matches_clap_parser() {
         let mut actual = Cli::command()
             .get_subcommands()

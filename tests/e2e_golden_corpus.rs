@@ -332,6 +332,9 @@ fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOut
     let scenario = &fixture.scenario;
 
     // Exit code.
+    if fixture.expected.exit_code.is_some() && fixture.expected.exit_code_nonzero {
+        panic!("[{scenario}] fixture sets both exit_code and exit_code_nonzero");
+    }
     if let Some(expected_code) = fixture.expected.exit_code {
         assert_eq!(
             output.exit_code, expected_code,
@@ -344,6 +347,13 @@ fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOut
             output.exit_code, 0,
             "[{scenario}] expected non-zero exit code, got 0.\nstdout:\n{}\nstderr:\n{}",
             output.stdout, output.stderr,
+        );
+    }
+    if fixture.expected.exit_code.is_none() && !fixture.expected.exit_code_nonzero {
+        assert_eq!(
+            output.exit_code, 0,
+            "[{scenario}] expected exit code 0 by default, got {}.\nstdout:\n{}\nstderr:\n{}",
+            output.exit_code, output.stdout, output.stderr,
         );
     }
 
@@ -575,6 +585,13 @@ fn run_surface_fixtures(surface: &str) {
 
     for fixture_path in &fixtures {
         let fixture = load_fixture(fixture_path);
+        assert_eq!(
+            fixture.surface,
+            surface,
+            "fixture {} surface mismatch: expected '{surface}', got '{}'",
+            fixture_path.display(),
+            fixture.surface
+        );
         let test_name = format!("golden_{surface}_{}", fixture.scenario);
         let harness = GoldenTestHarness::new(&test_name);
 

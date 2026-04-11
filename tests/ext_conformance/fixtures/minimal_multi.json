@@ -1,4 +1,5 @@
 {
+  "schema": "pi.ext.scenario_fixture.v1",
   "extension": {
     "id": "minimal_multi",
     "source": {
@@ -37,6 +38,7 @@
       "id": "scn-minimal-multi-neg-001",
       "kind": "tool",
       "summary": "Negative: echo tool fails with missing required text argument",
+      "tool_name": "echo",
       "expect": {
         "is_error": true
       }

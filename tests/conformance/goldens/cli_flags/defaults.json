@@ -8,6 +8,7 @@
   "explain_repair_policy": false,
   "export": null,
   "extension": [],
+  "extension_flags": [],
   "extension_policy": null,
   "file_args": [],
   "hide_cwd_in_prompt": false,
