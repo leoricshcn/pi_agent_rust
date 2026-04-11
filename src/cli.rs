@@ -371,7 +371,7 @@ pub struct Cli {
     /// Specific tools to enable (comma-separated: read,write,edit,bash,grep,find,ls,hashline_edit)
     #[arg(
         long,
-        default_value = "read,write,edit,bash"
+        default_value = "read,bash,edit,write,grep,find,ls,hashline_edit"
     )]
     pub tools: String,
 
@@ -879,7 +879,16 @@ mod tests {
         let cli = Cli::parse_from(["pi"]);
         assert_eq!(
             cli.enabled_tools(),
-            vec!["read", "write", "edit", "bash"]
+            vec![
+                "read",
+                "bash",
+                "edit",
+                "write",
+                "grep",
+                "find",
+                "ls",
+                "hashline_edit",
+            ]
         );
     }
 
