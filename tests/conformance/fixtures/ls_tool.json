@@ -98,6 +98,35 @@
         "content_regex": "(?s)apple\\.txt.*Zebra\\.txt",
         "details_none": true
       }
+    },
+    {
+      "name": "ls_mixed_entries_matches_golden",
+      "description": "Mixed files, directories, and dotfiles match the committed golden listing",
+      "setup": [
+        {"type": "create_file", "path": ".env", "content": ""},
+        {"type": "create_dir", "path": "Beta"},
+        {"type": "create_dir", "path": "alpha"},
+        {"type": "create_file", "path": "Readme.md", "content": ""}
+      ],
+      "input": {},
+      "expected": {
+        "content_golden": "ls_tool/mixed_entries.txt",
+        "details_none": true
+      }
+    },
+    {
+      "name": "ls_limit_notice_matches_goldens",
+      "description": "Limit notices and details stay locked to committed goldens",
+      "setup": [
+        {"type": "create_file", "path": "a.txt", "content": ""},
+        {"type": "create_file", "path": "b.txt", "content": ""},
+        {"type": "create_file", "path": "c.txt", "content": ""}
+      ],
+      "input": {"limit": 2},
+      "expected": {
+        "content_golden": "ls_tool/limit_notice.txt",
+        "details_golden": "ls_tool/limit_details.json"
+      }
     }
   ]
 }

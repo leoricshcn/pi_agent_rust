@@ -943,6 +943,66 @@ mod ls_tool {
     }
 
     #[test]
+    fn test_ls_listing_is_creation_order_invariant() {
+        asupersync::test_utils::run_test(|| async {
+            async fn listing_for(order: &[(&str, bool)]) -> (String, Option<serde_json::Value>) {
+                let temp_dir = tempfile::tempdir().expect("tempdir");
+                for (name, is_dir) in order {
+                    let path = temp_dir.path().join(name);
+                    if *is_dir {
+                        std::fs::create_dir_all(&path).expect("create dir");
+                    } else {
+                        std::fs::write(&path, b"fixture").expect("create file");
+                    }
+                }
+
+                let tool = pi::tools::LsTool::new(temp_dir.path());
+                let result = tool
+                    .execute("test-id", serde_json::json!({}), None)
+                    .await
+                    .expect("ls should succeed");
+                (get_text_content(&result.content), result.details)
+            }
+
+            let orders = [
+                [
+                    ("Readme.md", false),
+                    ("alpha", true),
+                    (".env", false),
+                    ("Beta", true),
+                ],
+                [
+                    ("Beta", true),
+                    (".env", false),
+                    ("Readme.md", false),
+                    ("alpha", true),
+                ],
+                [
+                    ("alpha", true),
+                    ("Beta", true),
+                    ("Readme.md", false),
+                    (".env", false),
+                ],
+            ];
+
+            let mut baseline: Option<String> = None;
+            for order in orders {
+                let (text, details) = listing_for(&order).await;
+                assert!(details.is_none(), "unexpected ls details for stable listing: {details:?}");
+                if let Some(expected) = &baseline {
+                    assert_eq!(
+                        text.as_str(),
+                        expected.as_str(),
+                        "ls output changed when only creation order changed"
+                    );
+                } else {
+                    baseline = Some(text);
+                }
+            }
+        });
+    }
+
+    #[test]
     fn test_ls_empty_directory() {
         asupersync::test_utils::run_test(|| async {
             let temp_dir = tempfile::tempdir().unwrap();

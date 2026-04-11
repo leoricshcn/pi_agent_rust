@@ -25,7 +25,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 
 /// A conformance test fixture file.
@@ -263,12 +263,13 @@ pub fn validate_expected(
             let actual_value = actual_details.get(key);
             match actual_value {
                 Some(actual) => {
-                    // For non-exact checks, we just verify the key exists and value type matches
-                    if actual.is_null() && !expected_value.is_null() {
-                        return Err(format!(
-                            "Details key '{key}' is null, expected: {expected_value}"
-                        ));
-                    }
+                    match_json_subset(actual, expected_value).map_err(|reason| {
+                        format!(
+                            "Details key '{key}' mismatch.\nExpected subset: {}\nActual: {}\nReason: {reason}",
+                            serde_json::to_string_pretty(expected_value).unwrap_or_default(),
+                            serde_json::to_string_pretty(actual).unwrap_or_default(),
+                        )
+                    })?;
                 }
                 None => {
                     return Err(format!(
@@ -345,12 +346,14 @@ pub fn validate_expected_with_goldens(
                     golden_path.display()
                 )
             })?;
-        if actual_details != &golden_details {
+        let actual_canonical = canonicalize_json(actual_details);
+        let golden_canonical = canonicalize_json(&golden_details);
+        if actual_canonical != golden_canonical {
             return Err(format!(
                 "Details mismatch against golden '{}'.\nExpected:\n{}\nActual:\n{}",
                 golden_path.display(),
-                serde_json::to_string_pretty(&golden_details).unwrap_or_default(),
-                serde_json::to_string_pretty(actual_details).unwrap_or_default()
+                serde_json::to_string_pretty(&golden_canonical).unwrap_or_default(),
+                serde_json::to_string_pretty(&actual_canonical).unwrap_or_default()
             ));
         }
     }
@@ -358,9 +361,87 @@ pub fn validate_expected_with_goldens(
     Ok(())
 }
 
+fn match_json_subset(actual: &serde_json::Value, expected: &serde_json::Value) -> Result<(), String> {
+    match expected {
+        serde_json::Value::Object(expected_map) => {
+            let actual_map = actual.as_object().ok_or_else(|| {
+                format!(
+                    "expected object, found {}",
+                    json_type_name(actual)
+                )
+            })?;
+            for (key, expected_child) in expected_map {
+                let actual_child = actual_map.get(key).ok_or_else(|| {
+                    format!("missing nested key '{key}'")
+                })?;
+                match_json_subset(actual_child, expected_child)
+                    .map_err(|reason| format!("at nested key '{key}': {reason}"))?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Array(expected_items) => {
+            let actual_items = actual.as_array().ok_or_else(|| {
+                format!(
+                    "expected array, found {}",
+                    json_type_name(actual)
+                )
+            })?;
+            if actual_items.len() != expected_items.len() {
+                return Err(format!(
+                    "expected array length {}, found {}",
+                    expected_items.len(),
+                    actual_items.len()
+                ));
+            }
+            for (idx, (actual_item, expected_item)) in
+                actual_items.iter().zip(expected_items.iter()).enumerate()
+            {
+                match_json_subset(actual_item, expected_item)
+                    .map_err(|reason| format!("at index {idx}: {reason}"))?;
+            }
+            Ok(())
+        }
+        _ => {
+            if actual == expected {
+                Ok(())
+            } else {
+                Err(format!("expected {expected}, found {actual}"))
+            }
+        }
+    }
+}
+
+const fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+fn canonicalize_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(canonicalize_json).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let canonical = map
+                .iter()
+                .map(|(key, value)| (key.clone(), canonicalize_json(value)))
+                .collect::<BTreeMap<_, _>>();
+            serde_json::Value::Object(canonical.into_iter().collect())
+        }
+        _ => value.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_validate_content_contains() {
@@ -399,6 +480,66 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_details_subset_accepts_nested_superset() {
+        let expected = Expected {
+            details: std::iter::once((
+                "truncation".to_string(),
+                serde_json::json!({
+                    "truncated": true,
+                    "summary": {
+                        "kind": "bytes"
+                    }
+                }),
+            ))
+            .collect(),
+            ..Default::default()
+        };
+
+        let actual = serde_json::json!({
+            "truncation": {
+                "truncated": true,
+                "summary": {
+                    "kind": "bytes",
+                    "limit": 1024
+                },
+                "extra": true
+            },
+            "unused": "field"
+        });
+
+        assert!(validate_expected(&expected, "", Some(&actual)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_details_subset_rejects_nested_mismatch() {
+        let expected = Expected {
+            details: std::iter::once((
+                "truncation".to_string(),
+                serde_json::json!({
+                    "summary": {
+                        "kind": "bytes"
+                    }
+                }),
+            ))
+            .collect(),
+            ..Default::default()
+        };
+
+        let actual = serde_json::json!({
+            "truncation": {
+                "summary": {
+                    "kind": "lines"
+                }
+            }
+        });
+
+        let err = validate_expected(&expected, "", Some(&actual))
+            .expect_err("subset mismatch should fail");
+        assert!(err.contains("nested key 'summary'"));
+        assert!(err.contains("expected \"bytes\", found \"lines\""));
+    }
+
+    #[test]
     fn test_display_name_includes_requirement_ids() {
         let case = TestCase {
             name: "defaults".to_string(),
@@ -426,6 +567,59 @@ mod tests {
             &std::fs::read_to_string(details_path).expect("read defaults golden"),
         )
         .expect("parse defaults golden");
+
+        assert!(validate_expected_with_goldens(&expected, "", Some(&details)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_expected_with_details_golden_ignores_object_key_order() {
+        let expected = Expected {
+            details_golden: Some("cli_flags/defaults.json".to_string()),
+            ..Default::default()
+        };
+        let details = serde_json::json!({
+            "message_args": [],
+            "file_args": [],
+            "command": null,
+            "list_providers": false,
+            "list_models": null,
+            "export": null,
+            "hide_cwd_in_prompt": false,
+            "no_themes": false,
+            "theme_path": null,
+            "theme": null,
+            "no_prompt_templates": false,
+            "prompt_template": null,
+            "no_skills": false,
+            "skill": null,
+            "explain_repair_policy": false,
+            "repair_policy": null,
+            "explain_extension_policy": false,
+            "extension_policy": null,
+            "no_extensions": false,
+            "extension": null,
+            "tools": null,
+            "no_tools": false,
+            "verbose": false,
+            "acp": false,
+            "print": false,
+            "mode": null,
+            "no_migrations": false,
+            "session_durability": null,
+            "no_session": false,
+            "session_dir": null,
+            "session": null,
+            "resume": false,
+            "continue": false,
+            "append_system_prompt": null,
+            "system_prompt": null,
+            "thinking": null,
+            "models": null,
+            "api_key": null,
+            "model": null,
+            "provider": null,
+            "version": false
+        });
 
         assert!(validate_expected_with_goldens(&expected, "", Some(&details)).is_ok());
     }
@@ -466,5 +660,44 @@ mod tests {
         let err =
             validate_expected_with_goldens(&expected, "", None).expect_err("must reject escape");
         assert!(err.contains("must not escape"));
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_details_subset_is_monotonic_under_extra_fields(
+            count in 0u64..1000,
+            noise in any::<bool>(),
+            tail in proptest::collection::vec(any::<u8>(), 0..8),
+        ) {
+            let expected = Expected {
+                details: std::iter::once((
+                    "meta".to_string(),
+                    serde_json::json!({
+                        "count": count,
+                        "nested": {
+                            "enabled": true
+                        }
+                    }),
+                ))
+                .collect(),
+                ..Default::default()
+            };
+
+            let actual = serde_json::json!({
+                "meta": {
+                    "count": count,
+                    "nested": {
+                        "enabled": true,
+                        "noise": noise
+                    },
+                    "tail": tail
+                },
+                "extra_top_level": {
+                    "present": true
+                }
+            });
+
+            prop_assert!(validate_expected(&expected, "", Some(&actual)).is_ok());
+        }
     }
 }

@@ -1,24 +1,30 @@
 {
   "extension": {
     "id": "npm/qualisero-pi-agent-scip",
-    "source": { "path": "npm/qualisero-pi-agent-scip/dist/index.d.ts" }
+    "source": { "path": "npm/qualisero-pi-agent-scip/dist/index.js" }
   },
   "scenarios": [
     {
       "id": "scn-npm-qualisero-scip-reg",
       "kind": "registration",
-      "summary": "Validates extension loads with no registrations (type declaration entry)",
+      "summary": "Verifies 6 tool(s), event hooks registered for the npm qualisero SCIP bundle",
       "expect": {
-        "tool_count": 0
+        "tool_count": 6,
+        "event_hooks_contains": [
+          "before_agent_start",
+          "session_start"
+        ]
       }
     },
     {
-      "id": "scn-npm-qualisero-scip-evt-pos",
-      "kind": "event",
-      "summary": "Extension handles session_start event gracefully",
-      "event_name": "session_start",
+      "id": "scn-npm-qualisero-scip-tool-pos",
+      "kind": "tool",
+      "summary": "Invokes scip_find_definition tool with basic arguments",
+      "tool_name": "scip_find_definition",
       "input": {
-        "session_id": "test-session"
+        "arguments": {
+          "query": "test"
+        }
       },
       "expect": {
         "no_error": true
@@ -27,13 +33,25 @@
     {
       "id": "scn-npm-qualisero-scip-tool-neg",
       "kind": "tool",
-      "summary": "Invoking a nonexistent tool returns error",
-      "tool_name": "nonexistent_tool",
+      "summary": "Invokes scip_find_definition tool with empty arguments; expects error",
+      "tool_name": "scip_find_definition",
       "input": {
         "arguments": {}
       },
       "expect": {
         "is_error": true
+      }
+    },
+    {
+      "id": "scn-npm-qualisero-scip-evt-pos",
+      "kind": "event",
+      "summary": "Fires before_agent_start event",
+      "event_name": "before_agent_start",
+      "input": {
+        "session_id": "test-session"
+      },
+      "expect": {
+        "no_error": true
       }
     }
   ]

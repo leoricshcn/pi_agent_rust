@@ -4917,8 +4917,7 @@ conformance_test!(
 );
 conformance_test!(
     ext_npm_qualisero_pi_agent_scip,
-    "npm/qualisero-pi-agent-scip",
-    ignore
+    "npm/qualisero-pi-agent-scip"
 );
 conformance_test!(ext_npm_shitty_extensions, "npm/shitty-extensions", ignore);
 conformance_test!(ext_npm_tmustier_pi_arcade, "npm/tmustier-pi-arcade", ignore);
