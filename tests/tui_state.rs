@@ -2608,13 +2608,15 @@ fn tui_login_no_args_shows_provider_table() {
     assert_after_contains(&harness, &step, "anthropic");
     assert_after_contains(&harness, &step, "openai");
     assert_after_contains(&harness, &step, "google");
+    assert_after_contains(&harness, &step, "cohere");
+    assert_after_contains(&harness, &step, "openrouter");
     assert_after_contains(&harness, &step, "Usage: /login <provider>");
 
     log_auth_test_event(
         test_name,
         "provider_table_rendered",
         json!({
-            "providers": ["anthropic", "openai", "google"],
+            "providers": ["anthropic", "openai", "google", "cohere", "openrouter"],
             "authenticated": [],
         }),
     );
@@ -2753,6 +2755,21 @@ fn tui_state_slash_login_gemini_alias_shows_google_api_key_guidance() {
     let step = press_enter(&harness, &mut app);
     assert_after_contains(&harness, &step, "API key login: google/gemini");
     assert_after_contains(&harness, &step, "ai.google.dev/gemini-api/docs/api-key");
+}
+
+#[test]
+fn tui_state_slash_login_openrouter_shows_generic_api_key_guidance() {
+    let harness =
+        TestHarness::new("tui_state_slash_login_openrouter_shows_generic_api_key_guidance");
+    let mut app = build_app(&harness, Vec::new());
+    log_initial_state(&harness, &app);
+
+    type_text(&harness, &mut app, "/login openrouter");
+    let step = press_enter(&harness, &mut app);
+    assert_after_contains(&harness, &step, "API key login: openrouter");
+    assert_after_contains(&harness, &step, "OpenRouter");
+    assert_after_contains(&harness, &step, "https://openrouter.ai/api/v1");
+    assert_after_contains(&harness, &step, "OPENROUTER_API_KEY");
 }
 
 #[test]

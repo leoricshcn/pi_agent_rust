@@ -31,6 +31,7 @@ use crate::error::{Error, Result};
 use crate::model::{AssistantMessage, AssistantMessageEvent, ContentBlock};
 use crate::models::ModelEntry;
 use crate::provider::StreamOptions;
+use crate::provider_metadata::provider_ids_match;
 use crate::providers;
 use crate::session::Session;
 use crate::tools::ToolRegistry;
@@ -821,6 +822,52 @@ fn handle_initialize() -> Value {
     })
 }
 
+fn select_acp_model_entry(config: &Config, available_models: &[ModelEntry]) -> Option<ModelEntry> {
+    if let (Some(default_provider), Some(default_model)) = (
+        config.default_provider.as_deref(),
+        config.default_model.as_deref(),
+    ) {
+        if let Some(entry) = available_models.iter().find(|entry| {
+            provider_ids_match(&entry.model.provider, default_provider)
+                && entry.model.id.eq_ignore_ascii_case(default_model)
+        }) {
+            return Some(entry.clone());
+        }
+    }
+
+    if let Some(default_provider) = config.default_provider.as_deref() {
+        if let Some(entry) = available_models
+            .iter()
+            .find(|entry| provider_ids_match(&entry.model.provider, default_provider))
+        {
+            return Some(entry.clone());
+        }
+    }
+
+    if let Some(default_model) = config.default_model.as_deref() {
+        if let Some(entry) = available_models
+            .iter()
+            .find(|entry| entry.model.id.eq_ignore_ascii_case(default_model))
+        {
+            return Some(entry.clone());
+        }
+    }
+
+    available_models.first().cloned()
+}
+
+fn resolve_acp_thinking_level(
+    config: &Config,
+    model_entry: &ModelEntry,
+) -> crate::model::ThinkingLevel {
+    let requested = config
+        .default_thinking_level
+        .as_deref()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(crate::model::ThinkingLevel::XHigh);
+    model_entry.clamp_thinking_level(requested)
+}
+
 /// Build a system prompt for ACP mode without requiring a `Cli` struct.
 fn build_acp_system_prompt(cwd: &std::path::Path, enabled_tools: &[&str]) -> String {
     use std::fmt::Write as _;
@@ -887,11 +934,9 @@ async fn handle_session_new(
     let enabled_tools: Vec<&str> = vec!["read", "bash", "edit", "write", "grep", "find", "ls"];
     let tools = ToolRegistry::new(&enabled_tools, &cwd, Some(&options.config));
 
-    // Pick the first available model, or fall back to default.
-    let model_entry = options
-        .available_models
-        .first()
-        .cloned()
+    // ACP should respect the same configured default provider/model preference
+    // as the normal startup path instead of picking an arbitrary ready model.
+    let model_entry = select_acp_model_entry(&options.config, &options.available_models)
         .ok_or_else(|| Error::provider("acp", "No models available"))?;
 
     let provider = providers::create_provider(&model_entry, None)
@@ -912,14 +957,7 @@ async fn handle_session_new(
 
     let stream_options = StreamOptions {
         api_key,
-        thinking_level: Some(model_entry.clamp_thinking_level(
-            options
-                .config
-                .default_thinking_level
-                .as_deref()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(crate::model::ThinkingLevel::Off),
-        )),
+        thinking_level: Some(resolve_acp_thinking_level(&options.config, &model_entry)),
         headers: model_entry.headers.clone(),
         ..StreamOptions::default()
     };
@@ -1253,6 +1291,36 @@ fn assistant_message_to_acp_content(msg: &AssistantMessage) -> Vec<AcpContentIte
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::{InputType, Model, ModelCost};
+    use std::collections::HashMap;
+
+    fn test_model_entry(provider: &str, id: &str) -> ModelEntry {
+        ModelEntry {
+            model: Model {
+                id: id.to_string(),
+                name: id.to_string(),
+                api: "openai-responses".to_string(),
+                provider: provider.to_string(),
+                base_url: "https://example.invalid".to_string(),
+                reasoning: true,
+                input: vec![InputType::Text],
+                cost: ModelCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                context_window: 128_000,
+                max_tokens: 8_192,
+                headers: HashMap::new(),
+            },
+            api_key: None,
+            headers: HashMap::new(),
+            auth_header: true,
+            compat: None,
+            oauth_config: None,
+        }
+    }
 
     #[test]
     fn json_rpc_ok_response_format() {
@@ -1297,6 +1365,111 @@ mod tests {
         assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
         assert!(result["capabilities"]["streaming"].as_bool().unwrap());
         assert!(!result["capabilities"]["toolApproval"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn select_acp_model_entry_prefers_exact_configured_model() {
+        let config = Config {
+            default_provider: Some("anthropic".to_string()),
+            default_model: Some("claude-opus-4-5".to_string()),
+            ..Config::default()
+        };
+        let available = vec![
+            test_model_entry("openai", "gpt-5.2"),
+            test_model_entry("anthropic", "claude-opus-4-5"),
+        ];
+
+        let selected = select_acp_model_entry(&config, &available).expect("selected model");
+
+        assert_eq!(selected.model.provider, "anthropic");
+        assert_eq!(selected.model.id, "claude-opus-4-5");
+    }
+
+    #[test]
+    fn select_acp_model_entry_prefers_default_provider_when_model_is_unset() {
+        let config = Config {
+            default_provider: Some("anthropic".to_string()),
+            ..Config::default()
+        };
+        let available = vec![
+            test_model_entry("openai", "gpt-5.2"),
+            test_model_entry("anthropic", "claude-sonnet-4"),
+        ];
+
+        let selected = select_acp_model_entry(&config, &available).expect("selected model");
+
+        assert_eq!(selected.model.provider, "anthropic");
+        assert_eq!(selected.model.id, "claude-sonnet-4");
+    }
+
+    #[test]
+    fn select_acp_model_entry_prefers_default_model_when_provider_is_unset() {
+        let config = Config {
+            default_model: Some("gpt-5.2".to_string()),
+            ..Config::default()
+        };
+        let available = vec![
+            test_model_entry("anthropic", "claude-sonnet-4"),
+            test_model_entry("openai", "gpt-5.2"),
+        ];
+
+        let selected = select_acp_model_entry(&config, &available).expect("selected model");
+
+        assert_eq!(selected.model.provider, "openai");
+        assert_eq!(selected.model.id, "gpt-5.2");
+    }
+
+    #[test]
+    fn select_acp_model_entry_matches_provider_aliases() {
+        let config = Config {
+            default_provider: Some("gemini-cli".to_string()),
+            default_model: Some("gemini-2.5-pro".to_string()),
+            ..Config::default()
+        };
+        let available = vec![
+            test_model_entry("openai", "gpt-5.2"),
+            test_model_entry("google-gemini-cli", "gemini-2.5-pro"),
+        ];
+
+        let selected = select_acp_model_entry(&config, &available).expect("selected model");
+
+        assert_eq!(selected.model.provider, "google-gemini-cli");
+        assert_eq!(selected.model.id, "gemini-2.5-pro");
+    }
+
+    #[test]
+    fn select_acp_model_entry_falls_back_to_first_available_model() {
+        let available = vec![
+            test_model_entry("openai", "gpt-5.2"),
+            test_model_entry("anthropic", "claude-sonnet-4"),
+        ];
+
+        let selected =
+            select_acp_model_entry(&Config::default(), &available).expect("selected model");
+
+        assert_eq!(selected.model.provider, "openai");
+        assert_eq!(selected.model.id, "gpt-5.2");
+    }
+
+    #[test]
+    fn resolve_acp_thinking_level_defaults_to_highest_supported_level() {
+        let config = Config::default();
+        let model_entry = test_model_entry("openai", "gpt-5.2");
+
+        let thinking = resolve_acp_thinking_level(&config, &model_entry);
+
+        assert_eq!(thinking, crate::model::ThinkingLevel::XHigh);
+    }
+
+    #[test]
+    fn resolve_acp_thinking_level_clamps_non_reasoning_models_to_off() {
+        let config = Config::default();
+        let mut model_entry = test_model_entry("ollama", "llama3.2");
+        model_entry.model.reasoning = false;
+
+        let thinking = resolve_acp_thinking_level(&config, &model_entry);
+
+        assert_eq!(thinking, crate::model::ThinkingLevel::Off);
     }
 
     #[test]

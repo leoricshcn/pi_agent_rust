@@ -1,7 +1,10 @@
 use super::*;
 
 use crate::models::{ModelEntry, model_requires_configured_credential, normalize_api_key_opt};
-use crate::provider_metadata::{provider_ids_match, split_provider_model_spec};
+use crate::provider_metadata::{
+    ProviderMetadata, ProviderOnboardingMode, provider_ids_match, provider_metadata,
+    split_provider_model_spec,
+};
 
 #[cfg(feature = "clipboard")]
 use arboard::Clipboard as ArboardClipboard;
@@ -165,23 +168,74 @@ pub(super) fn normalize_auth_provider_input(raw: &str) -> String {
         .to_string()
 }
 
-pub(super) fn api_key_login_prompt(provider: &str) -> Option<&'static str> {
+fn provider_has_dedicated_login_flow(provider: &str) -> bool {
+    BUILTIN_LOGIN_PROVIDERS
+        .iter()
+        .any(|(builtin, _)| provider_ids_match(builtin, provider))
+}
+
+fn provider_supports_interactive_api_key_login(metadata: &ProviderMetadata) -> bool {
+    if metadata.auth_env_keys.is_empty() || provider_has_dedicated_login_flow(metadata.canonical_id)
+    {
+        return false;
+    }
+
+    match metadata.onboarding {
+        ProviderOnboardingMode::OpenAICompatiblePreset => metadata.routing_defaults.is_some(),
+        ProviderOnboardingMode::BuiltInNative => metadata
+            .routing_defaults
+            .is_some_and(|defaults| !defaults.base_url.is_empty()),
+        ProviderOnboardingMode::NativeAdapterRequired => false,
+    }
+}
+
+fn generic_api_key_login_prompt(metadata: &ProviderMetadata) -> String {
+    let provider = metadata.canonical_id;
+    let label = metadata.display_name.unwrap_or(provider);
+    let mut prompt = format!(
+        "API key login: {provider}\n\n\
+Paste your {label} API key to save it in auth.json under {provider}.\n"
+    );
+
+    if let Some(defaults) = metadata.routing_defaults
+        && !defaults.base_url.is_empty()
+    {
+        let _ = writeln!(prompt, "Default base URL: {}", defaults.base_url);
+    }
+
+    if !metadata.auth_env_keys.is_empty() {
+        let _ = writeln!(
+            prompt,
+            "Accepted env vars: {}",
+            metadata.auth_env_keys.join(", ")
+        );
+    }
+
+    prompt.push_str(
+        "\nYour input will be treated as sensitive and is not added to message history.",
+    );
+    prompt
+}
+
+pub(super) fn api_key_login_prompt(provider: &str) -> Option<String> {
     match provider {
-        "openai" => Some(
+        "openai" => Some(String::from(
             "API key login: openai\n\n\
 Paste your OpenAI API key to save it in auth.json.\n\
 Get a key from platform.openai.com/api-keys.\n\
 Rotate/revoke keys from that dashboard if compromised.\n\n\
 Your input will be treated as sensitive and is not added to message history.",
-        ),
-        "google" => Some(
+        )),
+        "google" => Some(String::from(
             "API key login: google/gemini\n\n\
 Paste your Google Gemini API key to save it in auth.json under google.\n\
 Get a key from ai.google.dev/gemini-api/docs/api-key.\n\
 Rotate/revoke keys from Google AI Studio if compromised.\n\n\
 Your input will be treated as sensitive and is not added to message history.",
-        ),
-        _ => None,
+        )),
+        _ => provider_metadata(provider)
+            .filter(|metadata| provider_supports_interactive_api_key_login(metadata))
+            .map(generic_api_key_login_prompt),
     }
 }
 
@@ -213,7 +267,7 @@ pub(super) fn remove_provider_credentials(
     removed
 }
 
-const BUILTIN_LOGIN_PROVIDERS: [(&str, &str); 9] = [
+const BUILTIN_LOGIN_PROVIDERS: [(&str, &str); 7] = [
     ("anthropic", "OAuth"),
     ("openai-codex", "OAuth"),
     ("google-gemini-cli", "OAuth"),
@@ -221,8 +275,6 @@ const BUILTIN_LOGIN_PROVIDERS: [(&str, &str); 9] = [
     ("kimi-for-coding", "OAuth"),
     ("github-copilot", "OAuth"),
     ("gitlab", "OAuth"),
-    ("openai", "API key"),
-    ("google", "API key"),
 ];
 
 const STARTUP_PRIORITY_OAUTH_PROVIDERS: [(&str, &str); 3] = [
@@ -349,7 +401,7 @@ pub(super) fn format_login_provider_listing(
 ) -> String {
     let mut output = String::from("Available login providers:\n\n");
 
-    let built_in_rows: Vec<(String, String, String)> = BUILTIN_LOGIN_PROVIDERS
+    let mut built_in_rows: Vec<(String, String, String)> = BUILTIN_LOGIN_PROVIDERS
         .iter()
         .map(|(provider, method)| {
             (
@@ -359,6 +411,20 @@ pub(super) fn format_login_provider_listing(
             )
         })
         .collect();
+    let mut api_key_rows: Vec<(String, String, String)> = crate::provider_metadata::PROVIDER_METADATA
+        .iter()
+        .filter(|meta| provider_supports_interactive_api_key_login(meta))
+        .map(|meta| {
+            let provider = meta.canonical_id.to_string();
+            (
+                provider.clone(),
+                "API key".to_string(),
+                format_provider_status(auth, &provider),
+            )
+        })
+        .collect();
+    api_key_rows.sort_by(|left, right| left.0.cmp(&right.0));
+    built_in_rows.extend(api_key_rows);
     append_provider_rows(&mut output, "Built-in", &built_in_rows);
 
     let extension_providers = collect_extension_oauth_providers(available_models);
@@ -464,8 +530,7 @@ fn session_thinking_level(
     session: &crate::session::Session,
 ) -> Option<crate::model::ThinkingLevel> {
     session
-        .header
-        .thinking_level
+        .effective_thinking_level_for_current_path()
         .as_deref()
         .and_then(|value| value.parse::<crate::model::ThinkingLevel>().ok())
 }
@@ -759,11 +824,11 @@ impl PiApp {
             return Err("Session busy; try again".to_string());
         };
 
-        let (target_entry, sync_model) = match (
-            session_guard.header.provider.as_deref(),
-            session_guard.header.model_id.as_deref(),
-        ) {
-            (Some(provider), Some(model_id)) => {
+        let session_model = session_guard.effective_model_for_current_path();
+        let session_thinking = session_guard.effective_thinking_level_for_current_path();
+
+        let (target_entry, sync_model) = match session_model.as_ref() {
+            Some((provider, model_id)) => {
                 if provider_ids_match(&self.model_entry.model.provider, provider)
                     && self.model_entry.model.id.eq_ignore_ascii_case(model_id)
                 {
@@ -784,7 +849,7 @@ impl PiApp {
                     )
                 }
             }
-            _ => (self.model_entry.clone(), false),
+            None => (self.model_entry.clone(), false),
         };
 
         let current_thinking = agent_guard
@@ -792,7 +857,7 @@ impl PiApp {
             .thinking_level
             .unwrap_or_default();
         let thinking_sync = plan_session_thinking_sync(
-            session_guard.header.thinking_level.as_deref(),
+            session_thinking.as_deref(),
             current_thinking,
             &target_entry,
         );
@@ -1825,28 +1890,6 @@ impl PiApp {
         let requested_provider = args.split_whitespace().next().unwrap_or(args).to_string();
         let provider = normalize_auth_provider_input(&requested_provider);
 
-        if let Some(prompt) = api_key_login_prompt(&provider) {
-            self.messages.push(ConversationMessage {
-                role: MessageRole::System,
-                content: prompt.to_string(),
-                thinking: None,
-                collapsed: false,
-            });
-            self.scroll_to_bottom();
-            self.pending_oauth = Some(PendingOAuth {
-                provider,
-                kind: PendingLoginKind::ApiKey,
-                verifier: String::new(),
-                oauth_config: None,
-                device_code: None,
-                redirect_uri: None,
-            });
-            self.input_mode = InputMode::SingleLine;
-            self.set_input_height(3);
-            self.input.focus();
-            return None;
-        }
-
         if provider == "kimi-for-coding" {
             self.status_message = Some("Starting Kimi Code login...".to_string());
             let event_tx = self.event_tx.clone();
@@ -1882,6 +1925,28 @@ impl PiApp {
                     }
                 }
             });
+            return None;
+        }
+
+        if let Some(prompt) = api_key_login_prompt(&provider) {
+            self.messages.push(ConversationMessage {
+                role: MessageRole::System,
+                content: prompt,
+                thinking: None,
+                collapsed: false,
+            });
+            self.scroll_to_bottom();
+            self.pending_oauth = Some(PendingOAuth {
+                provider,
+                kind: PendingLoginKind::ApiKey,
+                verifier: String::new(),
+                oauth_config: None,
+                device_code: None,
+                redirect_uri: None,
+            });
+            self.input_mode = InputMode::SingleLine;
+            self.set_input_height(3);
+            self.input.focus();
             return None;
         }
 
@@ -2641,6 +2706,30 @@ mod tests {
             login_oauth.contains("kimi-for-coding"),
             "kimi-for-coding should remain available in /login OAuth providers"
         );
+    }
+
+    #[test]
+    fn metadata_backed_api_key_prompt_supports_openai_compatible_presets() {
+        let prompt = super::api_key_login_prompt("openrouter").expect("openrouter prompt");
+        assert!(prompt.contains("API key login: openrouter"));
+        assert!(prompt.contains("OpenRouter"));
+        assert!(prompt.contains("https://openrouter.ai/api/v1"));
+        assert!(prompt.contains("OPENROUTER_API_KEY"));
+    }
+
+    #[test]
+    fn dedicated_login_flows_still_take_priority_over_generic_api_key_prompts() {
+        assert!(super::api_key_login_prompt("anthropic").is_none());
+        assert!(super::api_key_login_prompt("kimi-for-coding").is_none());
+    }
+
+    #[test]
+    fn login_provider_listing_includes_metadata_backed_api_key_providers() {
+        let auth = empty_auth_storage();
+        let listing = super::format_login_provider_listing(&auth, &[]);
+        assert!(listing.contains("openrouter"));
+        assert!(listing.contains("cohere"));
+        assert!(listing.contains("API key"));
     }
 
     #[test]
