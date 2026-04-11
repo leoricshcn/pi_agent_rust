@@ -1271,18 +1271,69 @@ impl Agent {
 
             match event {
                 StreamEvent::Start { partial } => {
-                    let shared = Arc::new(partial);
-                    self.update_partial_message(Arc::clone(&shared), &mut added_partial);
-                    on_event(AgentEvent::MessageStart {
-                        message: Message::Assistant(Arc::clone(&shared)),
-                    });
-                    sent_start = true;
-                    on_event(AgentEvent::MessageUpdate {
-                        message: Message::Assistant(Arc::clone(&shared)),
-                        assistant_message_event: AssistantMessageEvent::Start { partial: shared },
-                    });
+                    if added_partial {
+                        if let Some(Message::Assistant(msg_arc)) = self
+                            .messages
+                            .iter_mut()
+                            .rev()
+                            .find(|m| matches!(m, Message::Assistant(_)))
+                        {
+                            let msg = Arc::make_mut(msg_arc);
+                            if msg.content.is_empty() {
+                                *msg = partial;
+                            } else {
+                                msg.api = partial.api;
+                                msg.provider = partial.provider;
+                                msg.model = partial.model;
+                                msg.usage = partial.usage;
+                                msg.stop_reason = partial.stop_reason;
+                                msg.error_message = partial.error_message;
+                                msg.timestamp = partial.timestamp;
+                            }
+                            let shared = Arc::clone(msg_arc);
+                            if !sent_start {
+                                on_event(AgentEvent::MessageStart {
+                                    message: Message::Assistant(Arc::clone(&shared)),
+                                });
+                                sent_start = true;
+                            }
+                            on_event(AgentEvent::MessageUpdate {
+                                message: Message::Assistant(Arc::clone(&shared)),
+                                assistant_message_event: AssistantMessageEvent::Start {
+                                    partial: shared,
+                                },
+                            });
+                        } else {
+                            let shared = Arc::new(partial);
+                            self.update_partial_message(Arc::clone(&shared), &mut added_partial);
+                            on_event(AgentEvent::MessageStart {
+                                message: Message::Assistant(Arc::clone(&shared)),
+                            });
+                            sent_start = true;
+                            on_event(AgentEvent::MessageUpdate {
+                                message: Message::Assistant(Arc::clone(&shared)),
+                                assistant_message_event: AssistantMessageEvent::Start {
+                                    partial: shared,
+                                },
+                            });
+                        }
+                    } else {
+                        let shared = Arc::new(partial);
+                        self.update_partial_message(Arc::clone(&shared), &mut added_partial);
+                        on_event(AgentEvent::MessageStart {
+                            message: Message::Assistant(Arc::clone(&shared)),
+                        });
+                        sent_start = true;
+                        on_event(AgentEvent::MessageUpdate {
+                            message: Message::Assistant(Arc::clone(&shared)),
+                            assistant_message_event: AssistantMessageEvent::Start {
+                                partial: shared,
+                            },
+                        });
+                    }
                 }
                 StreamEvent::TextStart { content_index, .. } => {
+                    self.seed_partial_message_if_missing(&mut added_partial);
                     if let Some(Message::Assistant(msg_arc)) = self
                         .messages
                         .iter_mut()
@@ -1314,6 +1365,7 @@ impl Agent {
                     delta,
                     ..
                 } => {
+                    self.seed_partial_message_if_missing(&mut added_partial);
                     if let Some(Message::Assistant(msg_arc)) = self
                         .messages
                         .iter_mut()
@@ -1322,6 +1374,11 @@ impl Agent {
                     {
                         {
                             let msg = Arc::make_mut(msg_arc);
+                            if msg.content.get(content_index).is_none()
+                                && content_index == msg.content.len()
+                            {
+                                msg.content.push(ContentBlock::Text(TextContent::new("")));
+                            }
                             if let Some(ContentBlock::Text(text)) =
                                 msg.content.get_mut(content_index)
                             {
@@ -1350,6 +1407,7 @@ impl Agent {
                     content,
                     ..
                 } => {
+                    self.seed_partial_message_if_missing(&mut added_partial);
                     if let Some(Message::Assistant(msg_arc)) = self
                         .messages
                         .iter_mut()
@@ -1358,6 +1416,11 @@ impl Agent {
                     {
                         {
                             let msg = Arc::make_mut(msg_arc);
+                            if msg.content.get(content_index).is_none()
+                                && content_index == msg.content.len()
+                            {
+                                msg.content.push(ContentBlock::Text(TextContent::new("")));
+                            }
                             if let Some(ContentBlock::Text(text)) =
                                 msg.content.get_mut(content_index)
                             {
@@ -1382,6 +1445,7 @@ impl Agent {
                     }
                 }
                 StreamEvent::ThinkingStart { content_index, .. } => {
+                    self.seed_partial_message_if_missing(&mut added_partial);
                     if let Some(Message::Assistant(msg_arc)) = self
                         .messages
                         .iter_mut()
@@ -1416,6 +1480,7 @@ impl Agent {
                     delta,
                     ..
                 } => {
+                    self.seed_partial_message_if_missing(&mut added_partial);
                     if let Some(Message::Assistant(msg_arc)) = self
                         .messages
                         .iter_mut()
@@ -1424,6 +1489,14 @@ impl Agent {
                     {
                         {
                             let msg = Arc::make_mut(msg_arc);
+                            if msg.content.get(content_index).is_none()
+                                && content_index == msg.content.len()
+                            {
+                                msg.content.push(ContentBlock::Thinking(ThinkingContent {
+                                    thinking: String::new(),
+                                    thinking_signature: None,
+                                }));
+                            }
                             if let Some(ContentBlock::Thinking(thinking)) =
                                 msg.content.get_mut(content_index)
                             {
@@ -1452,6 +1525,7 @@ impl Agent {
                     content,
                     ..
                 } => {
+                    self.seed_partial_message_if_missing(&mut added_partial);
                     if let Some(Message::Assistant(msg_arc)) = self
                         .messages
                         .iter_mut()
@@ -1460,6 +1534,14 @@ impl Agent {
                     {
                         {
                             let msg = Arc::make_mut(msg_arc);
+                            if msg.content.get(content_index).is_none()
+                                && content_index == msg.content.len()
+                            {
+                                msg.content.push(ContentBlock::Thinking(ThinkingContent {
+                                    thinking: String::new(),
+                                    thinking_signature: None,
+                                }));
+                            }
                             if let Some(ContentBlock::Thinking(thinking)) =
                                 msg.content.get_mut(content_index)
                             {
@@ -1484,6 +1566,7 @@ impl Agent {
                     }
                 }
                 StreamEvent::ToolCallStart { content_index, .. } => {
+                    self.seed_partial_message_if_missing(&mut added_partial);
                     if let Some(Message::Assistant(msg_arc)) = self
                         .messages
                         .iter_mut()
@@ -1520,12 +1603,24 @@ impl Agent {
                     delta,
                     ..
                 } => {
+                    self.seed_partial_message_if_missing(&mut added_partial);
                     if let Some(Message::Assistant(msg_arc)) = self
                         .messages
                         .iter_mut()
                         .rev()
                         .find(|m| matches!(m, Message::Assistant(_)))
                     {
+                        if msg_arc.content.get(content_index).is_none()
+                            && content_index == msg_arc.content.len()
+                        {
+                            let msg = Arc::make_mut(msg_arc);
+                            msg.content.push(ContentBlock::ToolCall(ToolCall {
+                                id: String::new(),
+                                name: String::new(),
+                                arguments: serde_json::Value::Null,
+                                thought_signature: None,
+                            }));
+                        }
                         // No mutation needed for ToolCallDelta – args stay Null until ToolCallEnd.
                         // Just share the current Arc (O(1) refcount bump, zero deep copies).
                         let shared = Arc::clone(msg_arc);
@@ -1550,6 +1645,7 @@ impl Agent {
                     tool_call,
                     ..
                 } => {
+                    self.seed_partial_message_if_missing(&mut added_partial);
                     if let Some(Message::Assistant(msg_arc)) = self
                         .messages
                         .iter_mut()
@@ -1558,6 +1654,16 @@ impl Agent {
                     {
                         {
                             let msg = Arc::make_mut(msg_arc);
+                            if msg.content.get(content_index).is_none()
+                                && content_index == msg.content.len()
+                            {
+                                msg.content.push(ContentBlock::ToolCall(ToolCall {
+                                    id: String::new(),
+                                    name: String::new(),
+                                    arguments: serde_json::Value::Null,
+                                    thought_signature: None,
+                                }));
+                            }
                             if let Some(ContentBlock::ToolCall(tc)) =
                                 msg.content.get_mut(content_index)
                             {
@@ -1607,6 +1713,30 @@ impl Agent {
             }
         }
         Err(Error::api("Stream ended without Done event"))
+    }
+
+    /// Ensure we have a fresh assistant message for the current stream.
+    ///
+    /// Some providers/extensions can emit deltas without a Start event; without
+    /// this guard we would mutate the previous assistant message instead.
+    fn seed_partial_message_if_missing(&mut self, added_partial: &mut bool) {
+        if *added_partial {
+            return;
+        }
+
+        let message = AssistantMessage {
+            content: Vec::new(),
+            api: self.provider.api().to_string(),
+            provider: self.provider.name().to_string(),
+            model: self.provider.model_id().to_string(),
+            usage: Usage::default(),
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            timestamp: Utc::now().timestamp_millis(),
+        };
+        self.messages
+            .push(Message::Assistant(Arc::new(message)));
+        *added_partial = true;
     }
 
     /// Update the partial assistant message in `self.messages`.
@@ -6945,6 +7075,7 @@ mod tests {
     use super::*;
     use crate::auth::AuthCredential;
     use crate::provider::{InputType, Model, ModelCost};
+    use asupersync::runtime::RuntimeBuilder;
     use async_trait::async_trait;
     use futures::Stream;
     use std::collections::HashMap;
@@ -7007,6 +7138,19 @@ mod tests {
         }
     }
 
+    fn assistant_message(text: &str) -> AssistantMessage {
+        AssistantMessage {
+            content: vec![ContentBlock::Text(TextContent::new(text))],
+            api: "test-api".to_string(),
+            provider: "test-provider".to_string(),
+            model: "test-model".to_string(),
+            usage: Usage::default(),
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            timestamp: 0,
+        }
+    }
+
     #[derive(Debug)]
     struct SilentProvider;
 
@@ -7034,6 +7178,88 @@ mod tests {
         > {
             Ok(Box::pin(futures::stream::empty()))
         }
+    }
+
+    #[derive(Debug)]
+    struct DeltaOnlyProvider;
+
+    #[async_trait]
+    #[allow(clippy::unnecessary_literal_bound)]
+    impl Provider for DeltaOnlyProvider {
+        fn name(&self) -> &str {
+            "test-provider"
+        }
+
+        fn api(&self) -> &str {
+            "test-api"
+        }
+
+        fn model_id(&self) -> &str {
+            "test-model"
+        }
+
+        async fn stream(
+            &self,
+            _context: &Context<'_>,
+            _options: &StreamOptions,
+        ) -> crate::error::Result<
+            Pin<Box<dyn Stream<Item = crate::error::Result<StreamEvent>> + Send>>,
+        > {
+            let final_message = assistant_message("hello");
+            let events = vec![
+                Ok(StreamEvent::TextDelta {
+                    content_index: 0,
+                    delta: "hello".to_string(),
+                }),
+                Ok(StreamEvent::Done {
+                    reason: StopReason::Stop,
+                    message: final_message,
+                }),
+            ];
+            Ok(Box::pin(futures::stream::iter(events)))
+        }
+    }
+
+    #[test]
+    fn delta_without_start_does_not_mutate_previous_message() {
+        let runtime = RuntimeBuilder::current_thread()
+            .build()
+            .expect("runtime build");
+
+        runtime.block_on(async {
+            let provider = Arc::new(DeltaOnlyProvider);
+            let tools = ToolRegistry::from_tools(Vec::new());
+            let mut agent = Agent::new(provider, tools, AgentConfig::default());
+
+            agent.add_message(Message::Assistant(Arc::new(assistant_message("prev"))));
+
+            agent
+                .run_with_message_with_abort(user_message("hi"), None, |_| {})
+                .await
+                .expect("run");
+
+            let assistant_texts = agent
+                .messages()
+                .iter()
+                .filter_map(|message| match message {
+                    Message::Assistant(msg)
+                        if matches!(msg.content.as_slice(), [ContentBlock::Text(_)]) =>
+                    {
+                        if let [ContentBlock::Text(text)] = msg.content.as_slice() {
+                            Some(text.text.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                assistant_texts.as_slice(),
+                ["prev".to_string(), "hello".to_string()]
+            );
+        });
     }
 
     #[test]
