@@ -191,6 +191,31 @@ fn net_create_connection_stub_shape() {
 }
 
 #[test]
+fn net_isip_validation() {
+    let result = eval_multi(
+        r#"import net from "node:net";"#,
+        r#"(() => {
+        if (net.isIP("127.0.0.1") !== 4) return false;
+        if (net.isIPv4("255.255.255.255") !== true) return false;
+        if (net.isIP("999.999.999.999") !== 0) return false;
+        if (net.isIPv4("256.0.0.1") !== false) return false;
+        if (net.isIP("2001:0db8:85a3:0000:0000:8a2e:0370:7334") !== 6) return false;
+        if (net.isIPv6("2001:db8::1") !== true) return false;
+        if (net.isIP("2001::85a3::8a2e") !== 0) return false;
+
+        const valid = "1.2.3.4";
+        if (net.isIP(valid) !== 4) return false;
+        const invalids = ["256.2.3.4", "1.256.3.4", "1.2.256.4", "1.2.3.256"];
+        for (const ip of invalids) {
+            if (net.isIP(ip) !== 0) return false;
+        }
+        return true;
+    })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
 fn os_platform_matches_process_platform() {
     let result = eval_multi(
         r#"import os from "node:os";"#,

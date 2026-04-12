@@ -11405,15 +11405,56 @@ export function createServer(_opts, _callback) {
   throw new Error('node:net.createServer is not available in PiJS');
 }
 
-export function isIP(input) {
+function __pi_net_is_ipv4(input) {
   const value = String(input ?? '');
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(value)) return 4;
-  if (/^[0-9a-fA-F:]+$/.test(value) && value.includes(':')) return 6;
+  const parts = value.split('.');
+  if (parts.length !== 4) return false;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const num = Number(part);
+    if (!Number.isFinite(num) || num < 0 || num > 255) return false;
+  }
+  return true;
+}
+
+function __pi_net_ipv6_segment_count(segments) {
+  if (segments.length === 1 && segments[0] === '') return 0;
+  let count = 0;
+  for (const seg of segments) {
+    if (seg === '') return null;
+    if (seg.includes('.')) {
+      if (!__pi_net_is_ipv4(seg)) return null;
+      count += 2;
+      continue;
+    }
+    if (!/^[0-9a-fA-F]{1,4}$/.test(seg)) return null;
+    count += 1;
+  }
+  return count;
+}
+
+function __pi_net_is_ipv6(input) {
+  const value = String(input ?? '').toLowerCase();
+  if (!value.includes(':')) return false;
+  if (value.indexOf('::') !== value.lastIndexOf('::')) return false;
+  const parts = value.split('::');
+  const head = parts[0] ? parts[0].split(':') : [''];
+  const tail = parts[1] ? parts[1].split(':') : [''];
+  const headCount = __pi_net_ipv6_segment_count(head);
+  const tailCount = __pi_net_ipv6_segment_count(tail);
+  if (headCount === null || tailCount === null) return false;
+  if (parts.length === 1) return headCount === 8;
+  return headCount + tailCount <= 8;
+}
+
+export function isIP(input) {
+  if (__pi_net_is_ipv4(input)) return 4;
+  if (__pi_net_is_ipv6(input)) return 6;
   return 0;
 }
 
-export function isIPv4(input) { return isIP(input) === 4; }
-export function isIPv6(input) { return isIP(input) === 6; }
+export function isIPv4(input) { return __pi_net_is_ipv4(input); }
+export function isIPv6(input) { return __pi_net_is_ipv6(input); }
 
 export class Server {
   constructor() {

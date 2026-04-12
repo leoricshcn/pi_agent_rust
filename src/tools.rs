@@ -15,6 +15,7 @@ use asupersync::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf, SeekFrom};
 use asupersync::time::{sleep, wall_now};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::io::{BufRead, Read, Write};
@@ -22,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{OnceLock, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
@@ -3878,6 +3879,12 @@ struct FindInput {
     limit: Option<usize>,
 }
 
+#[derive(Debug)]
+struct FindEntry {
+    rel: String,
+    modified: Option<SystemTime>,
+}
+
 pub struct FindTool {
     cwd: PathBuf,
 }
@@ -3900,7 +3907,7 @@ impl Tool for FindTool {
         "find"
     }
     fn description(&self) -> &str {
-        "Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to 1000 results or 1MB (whichever is hit first)."
+        "Search for files by glob pattern. Returns matching file paths relative to the search directory. Sorted by modification time (newest first). Respects .gitignore. Output is truncated to 1000 results or 1MB (whichever is hit first)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -4086,7 +4093,7 @@ impl Tool for FindTool {
             });
         }
 
-        let mut relativized: Vec<String> = Vec::new();
+        let mut entries: Vec<FindEntry> = Vec::new();
         for raw_line in stdout.lines() {
             let line = raw_line.trim_end_matches('\r').trim();
             if line.is_empty() {
@@ -4115,14 +4122,27 @@ impl Tool for FindTool {
                 rel.push('/');
             }
 
-            relativized.push(rel);
+            let modified = std::fs::metadata(&full_path)
+                .and_then(|meta| meta.modified())
+                .ok();
+            entries.push(FindEntry { rel, modified });
         }
 
-        relativized.sort_by(|a, b| {
-            let a_lower = a.to_lowercase();
-            let b_lower = b.to_lowercase();
-            a_lower.cmp(&b_lower).then_with(|| a.cmp(b))
+        entries.sort_by(|a, b| {
+            let ordering = match (&a.modified, &b.modified) {
+                (Some(a_time), Some(b_time)) => b_time.cmp(a_time),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            };
+            ordering.then_with(|| {
+                let a_lower = a.rel.to_lowercase();
+                let b_lower = b.rel.to_lowercase();
+                a_lower.cmp(&b_lower).then_with(|| a.rel.cmp(&b.rel))
+            })
         });
+
+        let mut relativized: Vec<String> = entries.into_iter().map(|entry| entry.rel).collect();
 
         if relativized.is_empty() {
             return Ok(ToolOutput {
