@@ -300,10 +300,7 @@ pub fn apply_session_before_compact_response(
         return SessionBeforeCompactOutcome::default();
     };
 
-    let cancel = obj
-        .get("cancel")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    let cancel = obj.get("cancel").and_then(Value::as_bool).unwrap_or(false)
         || obj
             .get("cancelled")
             .and_then(Value::as_bool)
@@ -418,10 +415,7 @@ fn parse_custom_message(value: &Value, timestamp: i64) -> Option<CustomMessage> 
         .and_then(Value::as_str)?
         .to_string();
     let content = obj.get("content").and_then(Value::as_str)?.to_string();
-    let display = obj
-        .get("display")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
+    let display = obj.get("display").and_then(Value::as_bool).unwrap_or(true);
     let details = obj.get("details").cloned();
     Some(CustomMessage {
         content,

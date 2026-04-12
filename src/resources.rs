@@ -448,11 +448,7 @@ impl ResourceLoader {
         })
     }
 
-    pub fn extend_with_paths(
-        &mut self,
-        cwd: &Path,
-        paths: &ExtensionResourcePaths,
-    ) -> Result<()> {
+    pub fn extend_with_paths(&mut self, cwd: &Path, paths: &ExtensionResourcePaths) -> Result<()> {
         if paths.is_empty() {
             return Ok(());
         }

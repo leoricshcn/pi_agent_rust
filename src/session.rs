@@ -6152,14 +6152,16 @@ mod tests {
         }
         std::fs::write(&path, jsonl).expect("write legacy session");
 
-        let mut loaded =
-            run_async(async { Session::open(path.to_string_lossy().as_ref()).await })
-                .expect("open legacy session");
+        let mut loaded = run_async(async { Session::open(path.to_string_lossy().as_ref()).await })
+            .expect("open legacy session");
 
         assert_eq!(loaded.leaf_id.as_deref(), Some(branch_b_tip.as_str()));
         assert_eq!(loaded.header.fallback_provider.as_deref(), Some("openai"));
         assert_eq!(loaded.header.fallback_model_id.as_deref(), Some("gpt-5.4"));
-        assert_eq!(loaded.header.fallback_thinking_level.as_deref(), Some("low"));
+        assert_eq!(
+            loaded.header.fallback_thinking_level.as_deref(),
+            Some("low")
+        );
 
         assert!(loaded.navigate_to(&branch_a_tip));
         assert_eq!(loaded.header.provider.as_deref(), Some("anthropic"));

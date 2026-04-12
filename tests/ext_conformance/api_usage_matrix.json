@@ -209,12 +209,12 @@
       "module": "node:net",
       "extensions_using": 7,
       "tier_breakdown": { "T2": 1, "T3_npm": 4, "T3_gh": 1, "T3_ag": 1 },
-      "shim_status": "error_throw",
+      "shim_status": "stub",
       "criticality": "P3",
       "apis": [
-        { "name": "createConnection", "call_count": 3, "shim_status": "error_throw" },
+        { "name": "createConnection", "call_count": 3, "shim_status": "stub" },
         { "name": "createServer", "call_count": 2, "shim_status": "error_throw" },
-        { "name": "Socket", "call_count": 2, "shim_status": "error_throw" }
+        { "name": "Socket", "call_count": 2, "shim_status": "stub" }
       ]
     },
     {
@@ -634,7 +634,7 @@
       "fs.createReadStream (8 calls, stub)",
       "fs.readlink (7 calls, stub)",
       "child_process.fork (72 calls, error throw)",
-      "node:net (7 ext, all error throw)",
+      "node:net (7 ext, stubbed sockets)",
       "ws npm package (4 ext, missing)",
       "glob npm package (3 ext, stub only)"
     ]

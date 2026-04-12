@@ -2158,10 +2158,9 @@ mod startup_changelog_tests {
         assert!(!markdown.contains("Unreleased"));
         assert_eq!(config.last_changelog_version.as_deref(), Some("0.1.9"));
 
-        let persisted: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&config_path).expect("settings file"),
-        )
-        .expect("valid settings json");
+        let persisted: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).expect("settings file"))
+                .expect("valid settings json");
         assert_eq!(persisted["lastChangelogVersion"], "0.1.9");
     }
 }
@@ -2322,7 +2321,11 @@ impl PiApp {
 
     fn startup_init_cmd(input_cmd: Option<Cmd>, pending_cmd: Option<Cmd>) -> Option<Cmd> {
         let startup_cmd = sequence(vec![Some(Self::initial_window_size_cmd()), pending_cmd]);
-        batch(vec![input_cmd, startup_cmd, Self::autocomplete_refresh_cmd()])
+        batch(vec![
+            input_cmd,
+            startup_cmd,
+            Self::autocomplete_refresh_cmd(),
+        ])
     }
 
     /// Create a new Pi application.

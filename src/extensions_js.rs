@@ -7391,6 +7391,10 @@ export function streamSimpleOpenAIResponses() {
   throw new Error("@mariozechner/pi-ai.streamSimpleOpenAIResponses is not available in PiJS");
 }
 
+export function streamSimpleOpenAICompletions() {
+  throw new Error("@mariozechner/pi-ai.streamSimpleOpenAICompletions is not available in PiJS");
+}
+
 export async function complete(_model, _messages, _opts = {}) {
   // Return a minimal completion response stub
   return { content: "", model: _model ?? "unknown", usage: { input_tokens: 0, output_tokens: 0 } };
@@ -7425,7 +7429,7 @@ export async function refreshOpenAICodexToken(_refreshToken) {
   return { accessToken: "", refreshToken: "", expiresAt: Date.now() + 3600000 };
 }
 
-export default { StringEnum, calculateCost, createAssistantMessageEventStream, streamSimpleAnthropic, streamSimpleOpenAIResponses, complete, completeSimple, getModel, getApiProvider, getModels, loginOpenAICodex, refreshOpenAICodexToken };
+export default { StringEnum, calculateCost, createAssistantMessageEventStream, streamSimpleAnthropic, streamSimpleOpenAIResponses, streamSimpleOpenAICompletions, complete, completeSimple, getModel, getApiProvider, getModels, loginOpenAICodex, refreshOpenAICodexToken };
 "#
         .trim()
         .to_string(),
@@ -7526,6 +7530,16 @@ export class Input {
   constructor(_opts = {}) {
     this.value = "";
   }
+}
+
+export class ProcessTerminal {
+  constructor(_proc, _opts = {}) {
+    this.proc = _proc;
+  }
+  on(_event, _handler) { return this; }
+  write(_data) {}
+  resize(_cols, _rows) {}
+  destroy() {}
 }
 
 export const Key = {
@@ -7649,7 +7663,7 @@ export class Image {
   }
 }
 
-export default { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, Text, TruncatedText, Container, Markdown, Spacer, Editor, Box, SelectList, Input, Image, CURSOR_MARKER, isKeyRelease, parseKey, Key, DynamicBorder, SettingsList, fuzzyMatch, getEditorKeybindings, fuzzyFilter, CancellableLoader };
+export default { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, Text, TruncatedText, Container, Markdown, Spacer, Editor, Box, SelectList, Input, ProcessTerminal, Image, CURSOR_MARKER, isKeyRelease, parseKey, Key, DynamicBorder, SettingsList, fuzzyMatch, getEditorKeybindings, fuzzyFilter, CancellableLoader };
 "#
         .trim()
         .to_string(),
@@ -7791,6 +7805,15 @@ export function serializeConversation(entries) {
   } catch {
     return String(entries ?? "");
   }
+}
+
+export function buildSessionContext(entries = [], _leafId = null, _byId = null) {
+  const list = Array.isArray(entries) ? entries.slice() : [];
+  return {
+    messages: list,
+    thinkingLevel: null,
+    model: null,
+  };
 }
 
 export function parseFrontmatter(text) {
@@ -7986,6 +8009,10 @@ export function keyHint(action, fallback = "") {
   return keyMap[action] || fallback || action;
 }
 
+export function rawKeyHint(action, fallback = "") {
+  return keyHint(action, fallback);
+}
+
 // Stub: compact performs conversation compaction via LLM
 export async function compact(_preparation, _model, _apiKey, _customInstructions, _signal) {
   // Return a minimal compaction result
@@ -8035,12 +8062,23 @@ export class UserMessageComponent {
   }
 }
 
+export class ModelSelectorComponent {
+  constructor(_opts = {}) {
+    this.opts = _opts;
+  }
+
+  render() {
+    return [];
+  }
+}
+
 export class SessionManager {
   constructor() {}
   static inMemory() { return new SessionManager(); }
   getSessionFile() { return ""; }
   getSessionDir() { return ""; }
   getSessionId() { return ""; }
+  buildSessionContext() { return buildSessionContext([]); }
 }
 
 export class SettingsManager {
@@ -8125,6 +8163,7 @@ export default {
   parseSessionEntries,
   convertToLlm,
   serializeConversation,
+  buildSessionContext,
   parseFrontmatter,
   getMarkdownTheme,
   getSettingsListTheme,
@@ -8141,10 +8180,12 @@ export default {
   copyToClipboard,
   getAgentDir,
   keyHint,
+  rawKeyHint,
   compact,
   AssistantMessageComponent,
   ToolExecutionComponent,
   UserMessageComponent,
+  ModelSelectorComponent,
   SessionManager,
   SettingsManager,
   DefaultResourceLoader,
@@ -8288,6 +8329,7 @@ export const SymbolKind = { File: 1, Module: 2, Namespace: 3, Package: 4, Class:
 function makeReqType(m) { return { type: { get method() { return m; } }, method: m }; }
 function makeNotifType(m) { return { type: { get method() { return m; } }, method: m }; }
 export const InitializeRequest = makeReqType('initialize');
+export const ShutdownRequest = makeReqType('shutdown');
 export const DefinitionRequest = makeReqType('textDocument/definition');
 export const ReferencesRequest = makeReqType('textDocument/references');
 export const HoverRequest = makeReqType('textDocument/hover');
@@ -10702,6 +10744,12 @@ export const promises = {
   rm: async (path, opts) => rmSync(path, opts),
   rename: async (oldPath, newPath) => renameSync(oldPath, newPath),
   copyFile: async (src, dest, mode) => copyFileSync(src, dest, mode),
+  cp: async (src, dest, opts) => {
+    if (opts && opts.recursive) {
+      throw new Error("node:fs.promises.cp recursive copy is not supported in PiJS");
+    }
+    return copyFileSync(src, dest);
+  },
   appendFile: async (path, data, opts) => appendFileSync(path, data, opts),
   chmod: async (_path, _mode) => {},
 };
@@ -10731,6 +10779,15 @@ export async function readdir(path, opts) { return fs.promises.readdir(path, opt
 export async function rm(path, opts) { return fs.promises.rm(path, opts); }
 export async function lstat(path) { return fs.promises.lstat(path); }
 export async function copyFile(src, dest) { return fs.promises.copyFile(src, dest); }
+export async function cp(src, dest, opts = {}) {
+  if (typeof fs.promises.cp === 'function') {
+    return fs.promises.cp(src, dest, opts);
+  }
+  if (opts && opts.recursive) {
+    throw new Error('node:fs/promises.cp recursive copy is not supported in PiJS');
+  }
+  return fs.promises.copyFile(src, dest);
+}
 export async function rename(oldPath, newPath) { return fs.promises.rename(oldPath, newPath); }
 export async function chmod(path, mode) { return; }
 export async function chown(path, uid, gid) { return; }
@@ -10738,7 +10795,7 @@ export async function utimes(path, atime, mtime) { return; }
 export async function appendFile(path, data, opts) { return fs.promises.appendFile(path, data, opts); }
 export async function open(path, flags, mode) { return { close: async () => {} }; }
 export async function truncate(path, len) { return; }
-export default { access, mkdir, mkdtemp, readFile, writeFile, unlink, readlink, symlink, rmdir, stat, lstat, realpath, readdir, rm, copyFile, rename, chmod, chown, utimes, appendFile, open, truncate };
+export default { access, mkdir, mkdtemp, readFile, writeFile, unlink, readlink, symlink, rmdir, stat, lstat, realpath, readdir, rm, copyFile, cp, rename, chmod, chown, utimes, appendFile, open, truncate };
 "
         .trim()
         .to_string(),
@@ -11200,18 +11257,152 @@ export default { URL: _URL, URLSearchParams: _URLSearchParams, fileURLToPath, pa
     modules.insert(
         "node:net".to_string(),
         r"
-// Stub net module - socket operations are not available in PiJS
+import EventEmitter from 'node:events';
 
-export function createConnection(_opts, _callback) {
-  throw new Error('node:net.createConnection is not available in PiJS');
+// Stub net module - socket operations are not available in PiJS (no network I/O)
+
+function __pi_net_schedule(fn) {
+  if (typeof globalThis.setTimeout === 'function') {
+    globalThis.setTimeout(fn, 0);
+    return;
+  }
+  if (typeof queueMicrotask === 'function') {
+    queueMicrotask(fn);
+    return;
+  }
+  fn();
+}
+
+function __pi_net_bytes(data) {
+  if (typeof data === 'string') return data.length;
+  if (data && typeof data.byteLength === 'number') return data.byteLength;
+  if (data && typeof data.length === 'number') return data.length;
+  return 0;
+}
+
+function __pi_net_parse_args(args) {
+  let options = {};
+  let connectListener = null;
+  if (!args || args.length === 0) return { options, connectListener };
+
+  const first = args[0];
+  if (typeof first === 'function') {
+    connectListener = first;
+    return { options, connectListener };
+  }
+
+  if (first && typeof first === 'object' && !Array.isArray(first)) {
+    options = { ...first };
+    if (typeof args[1] === 'function') connectListener = args[1];
+    return { options, connectListener };
+  }
+
+  if (typeof first === 'number' || typeof first === 'string') {
+    options.port = first;
+    if (typeof args[1] === 'string') {
+      options.host = args[1];
+      if (typeof args[2] === 'function') connectListener = args[2];
+    } else if (typeof args[1] === 'function') {
+      connectListener = args[1];
+    }
+  }
+
+  return { options, connectListener };
+}
+
+function __pi_net_apply_options(socket, options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const host = opts.host ?? opts.hostname ?? socket.remoteAddress ?? '127.0.0.1';
+  const port = opts.port ?? socket.remotePort ?? 0;
+  socket.remoteAddress = String(host);
+  socket.remotePort = Number(port) || 0;
+  socket.localAddress = socket.localAddress || '127.0.0.1';
+  socket.localPort = socket.localPort || 0;
+}
+
+function __pi_net_finish_connect(socket) {
+  __pi_net_schedule(() => {
+    if (socket.destroyed) return;
+    socket.connecting = false;
+    socket.readyState = 'open';
+    socket.emit('connect');
+  });
+}
+
+export class Socket extends EventEmitter {
+  constructor(options = {}) {
+    super();
+    this.destroyed = false;
+    this.connecting = false;
+    this.readyState = 'closed';
+    this.bytesWritten = 0;
+    this.bytesRead = 0;
+    this.localAddress = '127.0.0.1';
+    this.localPort = 0;
+    this.remoteAddress = '127.0.0.1';
+    this.remotePort = 0;
+    __pi_net_apply_options(this, options);
+  }
+
+  connect(...args) {
+    const { options, connectListener } = __pi_net_parse_args(args);
+    __pi_net_apply_options(this, options);
+    if (typeof connectListener === 'function') this.once('connect', connectListener);
+    this.connecting = true;
+    this.readyState = 'opening';
+    __pi_net_finish_connect(this);
+    return this;
+  }
+
+  write(data, _encoding, cb) {
+    this.bytesWritten += __pi_net_bytes(data);
+    if (typeof cb === 'function') cb(null);
+    return true;
+  }
+
+  end(data, _encoding, cb) {
+    if (data !== undefined) this.write(data);
+    if (typeof cb === 'function') cb(null);
+    this.destroy();
+    return this;
+  }
+
+  destroy(err) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    this.connecting = false;
+    this.readyState = 'closed';
+    if (err) this.emit('error', err);
+    this.emit('close');
+    return this;
+  }
+
+  setTimeout(ms, cb) {
+    if (typeof cb === 'function' && typeof globalThis.setTimeout === 'function') {
+      globalThis.setTimeout(cb, ms);
+    }
+    return this;
+  }
+
+  setNoDelay() { return this; }
+  setKeepAlive() { return this; }
+  ref() { return this; }
+  unref() { return this; }
+  address() { return { address: this.localAddress, port: this.localPort, family: 'IPv4' }; }
+}
+
+export function createConnection(...args) {
+  const socket = new Socket();
+  socket.connect(...args);
+  return socket;
+}
+
+export function connect(...args) {
+  return createConnection(...args);
 }
 
 export function createServer(_opts, _callback) {
   throw new Error('node:net.createServer is not available in PiJS');
-}
-
-export function connect(_opts, _callback) {
-  throw new Error('node:net.connect is not available in PiJS');
 }
 
 export function isIP(input) {
@@ -11223,12 +11414,6 @@ export function isIP(input) {
 
 export function isIPv4(input) { return isIP(input) === 4; }
 export function isIPv6(input) { return isIP(input) === 6; }
-
-export class Socket {
-  constructor() {
-    throw new Error('node:net.Socket is not available in PiJS');
-  }
-}
 
 export class Server {
   constructor() {
@@ -19550,6 +19735,100 @@ if (typeof globalThis.Bun === 'undefined') {
         },
     });
 
+    const __pi_bun_schedule = (fn) => {
+        if (typeof globalThis.queueMicrotask === 'function') {
+            globalThis.queueMicrotask(fn);
+            return;
+        }
+        if (typeof globalThis.setTimeout === 'function') {
+            globalThis.setTimeout(fn, 0);
+            return;
+        }
+        try {
+            Promise.resolve().then(fn);
+        } catch (_) {
+            fn();
+        }
+    };
+
+    const __pi_bun_make_emitter = (target) => {
+        const listeners = {};
+        target.on = function(event, handler) {
+            if (typeof handler !== 'function') return this;
+            if (!listeners[event]) listeners[event] = [];
+            listeners[event].push(handler);
+            return this;
+        };
+        target.once = function(event, handler) {
+            if (typeof handler !== 'function') return this;
+            const wrapper = (...args) => {
+                this.off(event, wrapper);
+                handler(...args);
+            };
+            return this.on(event, wrapper);
+        };
+        target.off = function(event, handler) {
+            const list = listeners[event];
+            if (!list) return this;
+            if (!handler) {
+                delete listeners[event];
+                return this;
+            }
+            const idx = list.indexOf(handler);
+            if (idx >= 0) list.splice(idx, 1);
+            return this;
+        };
+        target.emit = function(event, ...args) {
+            const list = listeners[event];
+            if (!list || list.length === 0) return false;
+            list.slice().forEach((fn) => {
+                try { fn(...args); } catch (_) {}
+            });
+            return true;
+        };
+        target.addEventListener = target.on;
+        target.removeEventListener = target.off;
+        return target;
+    };
+
+    const __pi_bun_make_socket = (options = {}, handler = null) => {
+        const socket = __pi_bun_make_emitter({});
+        socket.remoteAddress = String(options.hostname || options.host || '127.0.0.1');
+        socket.remotePort = Number(options.port || 0);
+        socket.localAddress = '127.0.0.1';
+        socket.localPort = 0;
+        socket.readyState = 'opening';
+        socket.connecting = true;
+        socket.data = Object.prototype.hasOwnProperty.call(options, 'data') ? options.data : null;
+        socket.binaryType = options.binaryType || 'buffer';
+        socket.closed = false;
+        socket.write = (data) => {
+            if (typeof data === 'string') return data.length;
+            if (data && typeof data.byteLength === 'number') return data.byteLength;
+            if (data && typeof data.length === 'number') return data.length;
+            return 0;
+        };
+        socket.end = (data) => {
+            if (data !== undefined) socket.write(data);
+            socket.close();
+        };
+        socket.close = () => {
+            if (socket.closed) return;
+            socket.closed = true;
+            socket.readyState = 'closed';
+            socket.connecting = false;
+            if (handler && typeof handler.close === 'function') {
+                try { handler.close(socket); } catch (_) {}
+            }
+            const evt = { type: 'close' };
+            if (typeof socket.onclose === 'function') socket.onclose(evt);
+            socket.emit('close', evt);
+        };
+        socket.ref = () => socket;
+        socket.unref = () => socket;
+        return socket;
+    };
+
     const Bun = {};
 
     Bun.argv = Array.isArray(globalThis.process && globalThis.process.argv)
@@ -19615,12 +19894,56 @@ if (typeof globalThis.Bun === 'undefined') {
         return bytes.byteLength;
     };
 
-    Bun.connect = (_options = {}) => {
-        throw new Error('Bun.connect is not available in PiJS');
+    Bun.connect = (rawOptions = {}) => {
+        const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
+        const handler = options.socket && typeof options.socket === 'object' ? options.socket : null;
+        const socket = __pi_bun_make_socket(options, handler);
+        __pi_bun_schedule(() => {
+            if (socket.closed) return;
+            socket.connecting = false;
+            socket.readyState = 'open';
+            const evt = { type: 'open' };
+            if (typeof socket.onopen === 'function') socket.onopen(evt);
+            socket.emit('open', evt);
+            if (handler && typeof handler.open === 'function') {
+                try { handler.open(socket); } catch (_) {}
+            }
+        });
+        return socket;
     };
 
-    Bun.listen = (_options = {}) => {
-        throw new Error('Bun.listen is not available in PiJS');
+    Bun.listen = (rawOptions = {}) => {
+        const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
+        const handler = options.socket && typeof options.socket === 'object' ? options.socket : null;
+        const server = __pi_bun_make_emitter({});
+        server.closed = false;
+        server.listening = false;
+        server.port = Number(options.port || 0);
+        server.hostname = String(options.hostname || '0.0.0.0');
+        if (options.unix !== undefined) server.unix = options.unix;
+        server.stop = () => {
+            if (server.closed) return;
+            server.closed = true;
+            server.listening = false;
+            const evt = { type: 'close' };
+            if (typeof server.onclose === 'function') server.onclose(evt);
+            server.emit('close', evt);
+        };
+        server.reload = () => server;
+        server.ref = () => server;
+        server.unref = () => server;
+        __pi_bun_schedule(() => {
+            if (server.closed) return;
+            server.listening = true;
+            const evt = { type: 'listening' };
+            if (typeof server.onlistening === 'function') server.onlistening(evt);
+            server.emit('listening', evt);
+            if (handler && typeof handler.open === 'function') {
+                const socket = __pi_bun_make_socket(options, handler);
+                try { handler.open(socket); } catch (_) {}
+            }
+        });
+        return server;
     };
 
     Bun.which = (command) => {
@@ -25726,7 +26049,14 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert_eq!(r["result"]["summary"]["skipped"], serde_json::json!(1));
             assert_eq!(
                 r["order"],
-                serde_json::json!(["beforeEach", "pass", "afterEach", "beforeEach", "nested", "afterEach"])
+                serde_json::json!([
+                    "beforeEach",
+                    "pass",
+                    "afterEach",
+                    "beforeEach",
+                    "nested",
+                    "afterEach"
+                ])
             );
         });
     }

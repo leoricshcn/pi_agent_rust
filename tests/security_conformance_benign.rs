@@ -29,7 +29,7 @@ use pi::extensions::{
 use pi::tools::ToolRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ============================================================================
 // Dashboard artifact types
@@ -39,7 +39,7 @@ use std::path::PathBuf;
 const COMPAT_DASHBOARD_SCHEMA: &str = "pi.security.compat_dashboard.v1";
 
 /// A single compatibility check result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct CompatCheck {
     name: String,
     profile: String,
@@ -51,7 +51,7 @@ struct CompatCheck {
 }
 
 /// Per-profile summary statistics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct ProfileSummary {
     profile: String,
     total_checks: usize,
@@ -82,7 +82,7 @@ struct WaiverValidation {
 }
 
 /// Compatibility dashboard artifact emitted by the test suite.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct CompatDashboard {
     schema: String,
     generated_at: String,
@@ -97,6 +97,16 @@ struct CompatDashboard {
     regression_detected: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct CompatEvent {
+    name: String,
+    profile: String,
+    capability: String,
+    expected: String,
+    actual: String,
+    passed: bool,
+}
+
 // ============================================================================
 // Test helpers
 // ============================================================================
@@ -109,6 +119,94 @@ fn report_dir() -> PathBuf {
     let dir = repo_root().join("tests").join("security_compat");
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+fn load_compat_checks_from_events(path: &Path) -> Vec<CompatCheck> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut checks = Vec::new();
+    for (idx, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let event: CompatEvent = serde_json::from_str(line).unwrap_or_else(|err| {
+            panic!("invalid compat event at line {}: {err}", idx + 1);
+        });
+        checks.push(CompatCheck {
+            name: event.name,
+            profile: event.profile,
+            capability: event.capability,
+            expected_decision: event.expected,
+            actual_decision: event.actual,
+            passed: event.passed,
+            detail: None,
+        });
+    }
+    checks
+}
+
+fn summarize_checks(checks: &[CompatCheck]) -> (usize, usize, usize, Vec<ProfileSummary>, f64) {
+    let total = checks.len();
+    let passed = checks.iter().filter(|c| c.passed).count();
+    let failed = total - passed;
+
+    let per_profile: Vec<ProfileSummary> = HARDENED_PROFILES
+        .iter()
+        .map(|p| {
+            let name = profile_name(*p);
+            let profile_checks: Vec<&CompatCheck> =
+                checks.iter().filter(|c| c.profile == name).collect();
+            let pc = profile_checks.len();
+            let pp = profile_checks.iter().filter(|c| c.passed).count();
+            #[allow(clippy::cast_precision_loss)]
+            let rate = if pc > 0 {
+                (pp as f64 / pc as f64) * 100.0
+            } else {
+                100.0
+            };
+            ProfileSummary {
+                profile: name.to_string(),
+                total_checks: pc,
+                passed: pp,
+                failed: pc - pp,
+                pass_rate_pct: rate,
+            }
+        })
+        .collect();
+
+    #[allow(clippy::cast_precision_loss)]
+    let overall_rate = if total > 0 {
+        (passed as f64 / total as f64) * 100.0
+    } else {
+        100.0
+    };
+
+    (total, passed, failed, per_profile, overall_rate)
+}
+
+fn build_dashboard_from_checks(checks: Vec<CompatCheck>, generated_at: String) -> CompatDashboard {
+    let profiles_tested: Vec<String> = HARDENED_PROFILES
+        .iter()
+        .map(|p| profile_name(*p).to_string())
+        .collect();
+
+    let (total, passed, failed, per_profile, overall_rate) = summarize_checks(&checks);
+
+    CompatDashboard {
+        schema: COMPAT_DASHBOARD_SCHEMA.to_string(),
+        generated_at,
+        bead: "bd-1a2cu".to_string(),
+        profiles_tested,
+        total_checks: total,
+        total_passed: passed,
+        total_failed: failed,
+        overall_pass_rate_pct: overall_rate,
+        per_profile,
+        checks,
+        regression_detected: failed > 0,
+    }
 }
 
 const fn default_risk_config() -> RuntimeRiskConfig {
@@ -514,61 +612,14 @@ fn full_compatibility_matrix_passes() {
 #[test]
 fn generate_compat_dashboard_artifact() {
     let checks = run_full_compatibility_matrix();
-
-    let total = checks.len();
-    let passed = checks.iter().filter(|c| c.passed).count();
-    let failed = total - passed;
-
-    // Per-profile summaries
-    let profiles_tested: Vec<String> = HARDENED_PROFILES
-        .iter()
-        .map(|p| profile_name(*p).to_string())
-        .collect();
-
-    let per_profile: Vec<ProfileSummary> = HARDENED_PROFILES
-        .iter()
-        .map(|p| {
-            let name = profile_name(*p);
-            let profile_checks: Vec<&CompatCheck> =
-                checks.iter().filter(|c| c.profile == name).collect();
-            let pc = profile_checks.len();
-            let pp = profile_checks.iter().filter(|c| c.passed).count();
-            #[allow(clippy::cast_precision_loss)]
-            let rate = if pc > 0 {
-                (pp as f64 / pc as f64) * 100.0
-            } else {
-                100.0
-            };
-            ProfileSummary {
-                profile: name.to_string(),
-                total_checks: pc,
-                passed: pp,
-                failed: pc - pp,
-                pass_rate_pct: rate,
-            }
-        })
-        .collect();
-
-    #[allow(clippy::cast_precision_loss)]
-    let overall_rate = if total > 0 {
-        (passed as f64 / total as f64) * 100.0
-    } else {
-        100.0
-    };
-
-    let dashboard = CompatDashboard {
-        schema: COMPAT_DASHBOARD_SCHEMA.to_string(),
-        generated_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        bead: "bd-1a2cu".to_string(),
-        profiles_tested,
-        total_checks: total,
-        total_passed: passed,
-        total_failed: failed,
-        overall_pass_rate_pct: overall_rate,
-        per_profile,
+    let dashboard = build_dashboard_from_checks(
         checks,
-        regression_detected: failed > 0,
-    };
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    );
+    let total = dashboard.total_checks;
+    let passed = dashboard.total_passed;
+    let failed = dashboard.total_failed;
+    let overall_rate = dashboard.overall_pass_rate_pct;
 
     let dir = report_dir();
     let path = dir.join("security_compat_dashboard.json");
@@ -644,6 +695,48 @@ fn compat_dashboard_schema_valid() {
 }
 
 #[test]
+fn compat_dashboard_matches_golden_events() {
+    let dir = report_dir();
+    let events_path = dir.join("security_compat_events.jsonl");
+    let dashboard_path = dir.join("security_compat_dashboard.json");
+
+    let checks = load_compat_checks_from_events(&events_path);
+    if checks.is_empty() {
+        eprintln!(
+            "  SKIP: compat events not found or empty at {}",
+            events_path.display()
+        );
+        return;
+    }
+
+    let Ok(text) = std::fs::read_to_string(&dashboard_path) else {
+        eprintln!(
+            "  SKIP: dashboard not found at {}",
+            dashboard_path.display()
+        );
+        return;
+    };
+    if text.trim().is_empty() {
+        eprintln!(
+            "  SKIP: dashboard file is empty at {}",
+            dashboard_path.display()
+        );
+        return;
+    }
+
+    let mut expected: CompatDashboard =
+        serde_json::from_str(&text).expect("parse compat dashboard");
+    let generated_at = "2026-02-14T12:00:00.000Z".to_string();
+    expected.generated_at = generated_at.clone();
+
+    let actual = build_dashboard_from_checks(checks, generated_at);
+    assert_eq!(
+        actual, expected,
+        "dashboard derived from events should match golden artifact"
+    );
+}
+
+#[test]
 fn compat_dashboard_roundtrip() {
     let checks = run_full_compatibility_matrix();
     let dashboard = CompatDashboard {
@@ -665,6 +758,22 @@ fn compat_dashboard_roundtrip() {
     assert_eq!(restored.schema, COMPAT_DASHBOARD_SCHEMA);
     assert_eq!(restored.total_checks, dashboard.total_checks);
     assert_eq!(restored.total_passed, dashboard.total_passed);
+}
+
+#[test]
+fn compat_dashboard_summary_order_invariant() {
+    let checks = run_full_compatibility_matrix();
+    let (total, passed, failed, per_profile, overall_rate) = summarize_checks(&checks);
+
+    let mut reversed = checks;
+    reversed.reverse();
+    let (rtotal, rpassed, rfailed, rper_profile, roverall_rate) = summarize_checks(&reversed);
+
+    assert_eq!(total, rtotal);
+    assert_eq!(passed, rpassed);
+    assert_eq!(failed, rfailed);
+    assert!((overall_rate - roverall_rate).abs() <= f64::EPSILON);
+    assert_eq!(per_profile, rper_profile);
 }
 
 // ============================================================================

@@ -275,18 +275,14 @@ fn bunfig_define_returns_object() {
 
 #[test]
 fn bunfig_load_config_returns_defaults() {
-    let result = eval_ext(
+    let result = eval_ext_async(
         r#"import { loadConfig } from "bunfig";"#,
         r#"(async () => {
             const cfg = await loadConfig({ defaultConfig: { port: 8080, host: "localhost" } });
             return cfg.port + ":" + cfg.host;
         })()"#,
     );
-    // async result via toString on promise — the eval helper wraps in String()
-    // which for a promise gives "[object Promise]". Let's use a sync approach.
-    // Actually, loadConfig returns a promise, so we need to check the default works.
-    // The eval_ext helper doesn't await. Let's test the sync path instead.
-    assert!(result == "8080:localhost" || result.contains("Promise") || result.contains("object"));
+    assert_eq!(result, "8080:localhost");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -353,6 +349,70 @@ fn bun_which_resolves_existing_binary() {
         })()"#,
     );
     assert_eq!(result, "ok");
+}
+
+#[test]
+fn bun_connect_emits_open_and_preserves_data() {
+    let result = eval_ext_async(
+        "",
+        r#"(async () => {
+            const events = [];
+            const tick = () => new Promise((resolve) => {
+                if (typeof globalThis.queueMicrotask === "function") {
+                    return queueMicrotask(resolve);
+                }
+                if (typeof globalThis.setTimeout === "function") {
+                    return setTimeout(resolve, 0);
+                }
+                Promise.resolve().then(resolve);
+            });
+
+            const socket = Bun.connect({
+                hostname: "example.com",
+                port: 443,
+                data: { tag: "ok" },
+                socket: {
+                    open() { events.push("handler"); }
+                }
+            });
+            socket.on("open", () => events.push("listener"));
+            await tick();
+            const writeLen = socket.write("hi");
+            return `${socket.readyState}:${socket.remotePort}:${socket.data.tag}:${events.join("|")}:${writeLen}`;
+        })()"#,
+    );
+    assert_eq!(result, "open:443:ok:listener|handler:2");
+}
+
+#[test]
+fn bun_listen_emits_listening_and_invokes_handler() {
+    let result = eval_ext_async(
+        "",
+        r#"(async () => {
+            const events = [];
+            const tick = () => new Promise((resolve) => {
+                if (typeof globalThis.queueMicrotask === "function") {
+                    return queueMicrotask(resolve);
+                }
+                if (typeof globalThis.setTimeout === "function") {
+                    return setTimeout(resolve, 0);
+                }
+                Promise.resolve().then(resolve);
+            });
+
+            const server = Bun.listen({
+                port: 5050,
+                hostname: "127.0.0.1",
+                socket: {
+                    open() { events.push("handler"); }
+                }
+            });
+            server.on("listening", () => events.push("listener"));
+            await tick();
+            return `${server.port}:${server.hostname}:${events.join("|")}:${typeof server.stop}`;
+        })()"#,
+    );
+    assert_eq!(result, "5050:127.0.0.1:listener|handler:function");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -173,6 +173,24 @@ import { Buffer } from "node:buffer";"#,
 }
 
 #[test]
+fn net_create_connection_stub_shape() {
+    let result = eval_multi(
+        r#"import net from "node:net";"#,
+        r#"(() => {
+        const socket = net.createConnection({ port: 1234, host: "example.test" });
+        return Boolean(socket)
+          && socket.connecting === true
+          && socket.readyState === "opening"
+          && socket.remotePort === 1234
+          && socket.remoteAddress === "example.test"
+          && typeof socket.write === "function"
+          && typeof socket.end === "function";
+    })()"#,
+    );
+    assert_eq!(result, "true");
+}
+
+#[test]
 fn os_platform_matches_process_platform() {
     let result = eval_multi(
         r#"import os from "node:os";"#,

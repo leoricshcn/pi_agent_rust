@@ -32,7 +32,7 @@ pub enum ModuleSupport {
     Partial,
     /// Exists as a stub (loads without error but does nothing useful).
     Stub,
-    /// Module resolves but throws on import (e.g. `node:net`).
+    /// Module resolves but throws on import (e.g. `node:tls`).
     ErrorThrow,
     /// Module is completely missing — import will fail at load time.
     Missing,
@@ -377,6 +377,7 @@ pub fn known_module_support(specifier: &str) -> Option<ModuleSupport> {
         | "tty"
         | "assert"
         | "http2"
+        | "net"
         | "vm"
         | "v8"
         | "perf_hooks"
@@ -385,7 +386,7 @@ pub fn known_module_support(specifier: &str) -> Option<ModuleSupport> {
         | "async_hooks" => Some(ModuleSupport::Stub),
 
         // P3 — error throw
-        "net" | "dgram" | "dns" | "tls" | "cluster" => Some(ModuleSupport::ErrorThrow),
+        "dgram" | "dns" | "tls" | "cluster" => Some(ModuleSupport::ErrorThrow),
 
         // Known npm packages with real shims
         "@sinclair/typebox" | "zod" => Some(ModuleSupport::Real),
@@ -437,8 +438,8 @@ pub fn module_remediation(specifier: &str, support: ModuleSupport) -> Option<Str
         ("http2", ModuleSupport::Stub) => Some(
             "node:http2 is stubbed; use fetch() for client requests instead.".to_string()
         ),
-        ("net", ModuleSupport::ErrorThrow) => Some(
-            "Raw TCP sockets are not available. Use fetch() for HTTP or the pi.http hostcall for network requests.".to_string()
+        ("net", ModuleSupport::Stub | ModuleSupport::Partial) => Some(
+            "Raw TCP sockets are stubbed (no network I/O). Use fetch() for HTTP or the pi.http hostcall for network requests.".to_string()
         ),
         ("tls", ModuleSupport::ErrorThrow) => Some(
             "TLS sockets are not available. Use fetch() with HTTPS URLs instead.".to_string()
@@ -3002,10 +3003,6 @@ mod tests {
     #[test]
     fn known_modules_error_throw() {
         assert_eq!(
-            known_module_support("node:net"),
-            Some(ModuleSupport::ErrorThrow)
-        );
-        assert_eq!(
             known_module_support("node:tls"),
             Some(ModuleSupport::ErrorThrow)
         );
@@ -3013,10 +3010,18 @@ mod tests {
     }
 
     #[test]
+    fn known_modules_net_stub() {
+        assert_eq!(known_module_support("node:net"), Some(ModuleSupport::Stub));
+    }
+
+    #[test]
     fn known_modules_stubs() {
         assert_eq!(known_module_support("zlib"), Some(ModuleSupport::Stub));
         assert_eq!(known_module_support("node:vm"), Some(ModuleSupport::Stub));
-        assert_eq!(known_module_support("node:http2"), Some(ModuleSupport::Stub));
+        assert_eq!(
+            known_module_support("node:http2"),
+            Some(ModuleSupport::Stub)
+        );
         assert_eq!(known_module_support("chokidar"), Some(ModuleSupport::Stub));
     }
 
@@ -3034,10 +3039,12 @@ mod tests {
     }
 
     #[test]
-    fn remediation_for_net_error_throw() {
-        let r = module_remediation("node:net", ModuleSupport::ErrorThrow);
+    fn remediation_for_net_stub() {
+        let r = module_remediation("node:net", ModuleSupport::Stub);
         assert!(r.is_some());
-        assert!(r.unwrap().contains("fetch()"));
+        let msg = r.unwrap();
+        assert!(msg.contains("stubbed"));
+        assert!(msg.contains("pi.http") || msg.contains("fetch()"));
     }
 
     #[test]
@@ -3242,14 +3249,14 @@ export default function(pi) {
     }
 
     #[test]
-    fn analyze_source_missing_module() {
+    fn analyze_source_stubbed_net_warns() {
         let policy = ExtensionPolicy::default();
         let analyzer = PreflightAnalyzer::new(&policy, None);
         let source = r#"
 import net from "node:net";
 "#;
         let report = analyzer.analyze_source("net-ext", source);
-        assert_eq!(report.verdict, PreflightVerdict::Fail);
+        assert_eq!(report.verdict, PreflightVerdict::Warn);
         assert!(
             report
                 .findings

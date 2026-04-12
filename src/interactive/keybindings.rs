@@ -463,12 +463,8 @@ impl PiApp {
             return;
         }
 
-        if let Err(message) = self.switch_active_model(
-            &next,
-            provider_impl,
-            resolved_key_opt.as_deref(),
-            "cycle",
-        )
+        if let Err(message) =
+            self.switch_active_model(&next, provider_impl, resolved_key_opt.as_deref(), "cycle")
         {
             self.status_message = Some(message);
             return;

@@ -13,7 +13,7 @@ use this matrix to determine whether their extension will run unmodified.
 | Extension corpus (223 extensions) | 205/223 pass (91.9%) | 100% Tier 1, 95.4% Tier 2 |
 | Scenario conformance | 24/25 pass (96.0%) | Registration, events, tools, session |
 | Node API matrix | 13/13 pass (100%) | All critical Node builtins covered |
-| Bun API matrix | 5/7 pass (71.4%) | `connect`/`listen` unsupported |
+| Bun API matrix | 7/7 pass (stubbed) | `connect`/`listen` stubbed (no network I/O) |
 
 ---
 
@@ -65,7 +65,7 @@ with a clear error message identifying the unsupported call.
 
 | Module | Supported | Unsupported | Notes |
 |--------|-----------|-------------|-------|
-| `node:net` | `createConnection` (stub), `Socket` (stub) | `createServer` | Network listen blocked by sandbox |
+| `node:net` | `createConnection` (stub), `Socket` (stub) | `createServer` | Stubbed sockets (no network I/O); use `pi.http()` |
 | `node:readline` | `createInterface` (stub) | Interactive mode | Non-interactive only |
 
 ### Blocked
@@ -95,8 +95,8 @@ Pi provides a targeted Bun compatibility surface via `globalThis.Bun` and
 | `Bun.write(path, data)` | Supported | Write files |
 | `Bun.which(command)` | Supported | Locate executables on PATH |
 | `Bun.spawn(...)` | Supported | Capability-gated (`exec`) |
-| `Bun.connect(...)` | **Unsupported** | Use `pi.http()` or `node:http` instead |
-| `Bun.listen(...)` | **Unsupported** | Server APIs are outside the sandbox |
+| `Bun.connect(...)` | Stubbed (no network) | In-memory socket emitter; use `pi.http()` or `node:http` for real network |
+| `Bun.listen(...)` | Stubbed (no network) | In-memory server emitter; use `pi.http()` or `node:http` for real network |
 
 ---
 

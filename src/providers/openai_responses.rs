@@ -239,13 +239,10 @@ impl Provider for OpenAIResponsesProvider {
 
         // Note: Content-Type is set by .json() below; setting it here too
         // produces a duplicate header that OpenAI's server rejects.
-        let mut request = self
-            .client
-            .post(&self.base_url)
-            .header(
-                "Accept",
-                "text/event-stream, application/x-ndjson, application/ndjson",
-            );
+        let mut request = self.client.post(&self.base_url).header(
+            "Accept",
+            "text/event-stream, application/x-ndjson, application/ndjson",
+        );
 
         if let Some(ref auth_value) = auth_value {
             request = request.header("Authorization", format!("Bearer {auth_value}"));
@@ -462,16 +459,16 @@ impl<S> NdjsonStream<S> {
     }
 
     fn invalid_utf8_error() -> std::io::Error {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 in NDJSON stream")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid UTF-8 in NDJSON stream",
+        )
     }
 
     fn event_too_large_error(&self) -> std::io::Error {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!(
-                "NDJSON event exceeds {} bytes",
-                self.max_event_bytes
-            ),
+            format!("NDJSON event exceeds {} bytes", self.max_event_bytes),
         )
     }
 
@@ -489,8 +486,7 @@ impl<S> NdjsonStream<S> {
     }
 
     fn drain_buffer(&mut self) -> std::io::Result<()> {
-        if self.buffer.len() > self.max_event_bytes
-            && memchr::memchr(b'\n', &self.buffer).is_none()
+        if self.buffer.len() > self.max_event_bytes && memchr::memchr(b'\n', &self.buffer).is_none()
         {
             return Err(self.event_too_large_error());
         }

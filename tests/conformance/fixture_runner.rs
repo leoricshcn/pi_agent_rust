@@ -556,8 +556,8 @@ mod tests {
             content: "nope".to_string(),
         }];
 
-        let err = run_setup_steps(&steps, temp_dir.path())
-            .expect_err("should reject parent dir escape");
+        let err =
+            run_setup_steps(&steps, temp_dir.path()).expect_err("should reject parent dir escape");
         assert!(err.contains("must not escape"));
     }
 
@@ -569,8 +569,8 @@ mod tests {
             path: absolute.to_string_lossy().to_string(),
         }];
 
-        let err = run_setup_steps(&steps, temp_dir.path())
-            .expect_err("should reject absolute path");
+        let err =
+            run_setup_steps(&steps, temp_dir.path()).expect_err("should reject absolute path");
         assert!(err.contains("must be relative"));
     }
 }

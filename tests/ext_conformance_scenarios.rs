@@ -18,8 +18,8 @@ use pi::extensions::{
 };
 use pi::extensions_js::{HostcallKind, HostcallRequest, PiJsRuntimeConfig};
 use pi::resources::{
-    load_prompt_templates, load_skills, load_themes, LoadPromptTemplatesOptions,
-    LoadSkillsOptions, LoadThemesOptions,
+    LoadPromptTemplatesOptions, LoadSkillsOptions, LoadThemesOptions, load_prompt_templates,
+    load_skills, load_themes,
 };
 use pi::scheduler::HostcallOutcome;
 use pi::session::SessionMessage;
@@ -444,9 +444,7 @@ fn finalize_scenario_result(mut result: ScenarioResult) -> ScenarioResult {
 
 // ─── Extension loader ───────────────────────────────────────────────────────
 
-const SCENARIO_ENTRY_EXTS: &[&str] = &[
-    "ts", "tsx", "jsx", "js", "mjs", "cjs", "mts", "cts",
-];
+const SCENARIO_ENTRY_EXTS: &[&str] = &["ts", "tsx", "jsx", "js", "mjs", "cjs", "mts", "cts"];
 
 /// Resolve the artifact path for an extension ID.
 fn resolve_extension_path(extension_id: &str, items: &[SampleItem]) -> Option<PathBuf> {
@@ -581,11 +579,7 @@ fn extension_root_from_path(extension_path: &Path) -> PathBuf {
 fn relative_paths(root: &Path, paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths
         .into_iter()
-        .map(|path| {
-            path.strip_prefix(root)
-                .unwrap_or(&path)
-                .to_path_buf()
-        })
+        .map(|path| path.strip_prefix(root).unwrap_or(&path).to_path_buf())
         .collect()
 }
 
@@ -655,10 +649,7 @@ fn execute_resource_discovery_scenario(extension_path: &Path) -> Result<Value, S
         &extension_root,
         themes.themes.iter().map(|t| t.file_path.clone()).collect(),
     );
-    let template_paths = relative_paths(
-        &extension_root,
-        discover_template_paths(&extension_root),
-    );
+    let template_paths = relative_paths(&extension_root, discover_template_paths(&extension_root));
 
     Ok(serde_json::json!({
         "promptPaths": sorted_path_strings(prompt_paths),
@@ -670,10 +661,7 @@ fn execute_resource_discovery_scenario(extension_path: &Path) -> Result<Value, S
 
 fn execute_template_scenario(extension_path: &Path) -> Result<Value, String> {
     let extension_root = extension_root_from_path(extension_path);
-    let template_paths = relative_paths(
-        &extension_root,
-        discover_template_paths(&extension_root),
-    );
+    let template_paths = relative_paths(&extension_root, discover_template_paths(&extension_root));
     Ok(serde_json::json!({
         "templatePaths": sorted_path_strings(template_paths),
     }))
@@ -793,9 +781,7 @@ fn execute_mcp_scenario(
     let Some(input) = scenario.input.as_ref() else {
         return Ok(Value::Null);
     };
-    let server = input
-        .get("server")
-        .ok_or("mcp scenario missing server")?;
+    let server = input.get("server").ok_or("mcp scenario missing server")?;
     let name = server
         .get("name")
         .and_then(Value::as_str)

@@ -214,9 +214,8 @@ Paste your {label} API key to save it in auth.json under {provider}.\n"
         );
     }
 
-    prompt.push_str(
-        "\nYour input will be treated as sensitive and is not added to message history.",
-    );
+    prompt
+        .push_str("\nYour input will be treated as sensitive and is not added to message history.");
     prompt
 }
 
@@ -414,18 +413,19 @@ pub(super) fn format_login_provider_listing(
             )
         })
         .collect();
-    let mut api_key_rows: Vec<(String, String, String)> = crate::provider_metadata::PROVIDER_METADATA
-        .iter()
-        .filter(|meta| provider_supports_interactive_api_key_login(meta))
-        .map(|meta| {
-            let provider = meta.canonical_id.to_string();
-            (
-                provider.clone(),
-                "API key".to_string(),
-                format_provider_status(auth, &provider),
-            )
-        })
-        .collect();
+    let mut api_key_rows: Vec<(String, String, String)> =
+        crate::provider_metadata::PROVIDER_METADATA
+            .iter()
+            .filter(|meta| provider_supports_interactive_api_key_login(meta))
+            .map(|meta| {
+                let provider = meta.canonical_id.to_string();
+                (
+                    provider.clone(),
+                    "API key".to_string(),
+                    format_provider_status(auth, &provider),
+                )
+            })
+            .collect();
     api_key_rows.sort_by(|left, right| left.0.cmp(&right.0));
     built_in_rows.extend(api_key_rows);
     append_provider_rows(&mut output, "Built-in", &built_in_rows);
@@ -1975,29 +1975,25 @@ impl PiApp {
 
                     runtime_handle.spawn(async move {
                         let cx = Cx::current().unwrap_or_else(Cx::for_request);
-                        let (initial_selected_id, branch_count, entry_count) = match session
-                            .lock(&cx)
-                            .await
-                        {
-                            Ok(session_guard) => {
-                                let initial_selected_id =
-                                    resolve_tree_selector_initial_id(&session_guard, &args);
-                                let branch_count = session_guard.list_leaves().len();
-                                let entry_count = session_guard.entries.len();
-                                (initial_selected_id, branch_count, entry_count)
-                            }
-                            Err(err) => {
-                                let _ = crate::interactive::enqueue_pi_event(
-                                    &event_tx,
-                                    &task_cx,
-                                    PiMsg::AgentError(format!(
-                                        "Failed to lock session: {err}"
-                                    )),
-                                )
-                                .await;
-                                return;
-                            }
-                        };
+                        let (initial_selected_id, branch_count, entry_count) =
+                            match session.lock(&cx).await {
+                                Ok(session_guard) => {
+                                    let initial_selected_id =
+                                        resolve_tree_selector_initial_id(&session_guard, &args);
+                                    let branch_count = session_guard.list_leaves().len();
+                                    let entry_count = session_guard.entries.len();
+                                    (initial_selected_id, branch_count, entry_count)
+                                }
+                                Err(err) => {
+                                    let _ = crate::interactive::enqueue_pi_event(
+                                        &event_tx,
+                                        &task_cx,
+                                        PiMsg::AgentError(format!("Failed to lock session: {err}")),
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            };
 
                         let response = extensions
                             .dispatch_event_with_response(
@@ -2020,10 +2016,7 @@ impl PiApp {
                                 cancelled = true;
                             }
                             if let Some(obj) = value.as_object() {
-                                if obj
-                                    .get("cancel")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false)
+                                if obj.get("cancel").and_then(Value::as_bool).unwrap_or(false)
                                     || obj
                                         .get("cancelled")
                                         .and_then(Value::as_bool)
@@ -2031,8 +2024,7 @@ impl PiApp {
                                 {
                                     cancelled = true;
                                 }
-                                if let Some(custom_label) =
-                                    obj.get("label").and_then(Value::as_str)
+                                if let Some(custom_label) = obj.get("label").and_then(Value::as_str)
                                 {
                                     label = Some(custom_label.to_string());
                                 }
@@ -2456,12 +2448,8 @@ result in account suspension/ban. Prefer using an Anthropic API key (ANTHROPIC_A
             }
         };
 
-        if let Err(message) = self.switch_active_model(
-            &next,
-            provider_impl,
-            resolved_key_opt.as_deref(),
-            "command",
-        )
+        if let Err(message) =
+            self.switch_active_model(&next, provider_impl, resolved_key_opt.as_deref(), "command")
         {
             self.status_message = Some(message);
             return None;
@@ -2746,11 +2734,7 @@ result in account suspension/ban. Prefer using an Anthropic API key (ANTHROPIC_A
                 if template.description.trim().is_empty() {
                     let _ = writeln!(listing, "  /{}", template.name);
                 } else {
-                    let _ = writeln!(
-                        listing,
-                        "  /{} - {}",
-                        template.name, template.description
-                    );
+                    let _ = writeln!(listing, "  /{} - {}", template.name, template.description);
                 }
             }
 

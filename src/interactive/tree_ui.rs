@@ -497,10 +497,7 @@ impl PiApp {
                         "fromId".to_string(),
                         Value::String(pending.summary_from_id.clone()),
                     );
-                    summary_entry.insert(
-                        "summary".to_string(),
-                        Value::String(summary_clone),
-                    );
+                    summary_entry.insert("summary".to_string(), Value::String(summary_clone));
                     summary_entry.insert("fromHook".to_string(), Value::Bool(false));
                     summary_entry_payload = Some(Value::Object(summary_entry));
                 }
@@ -577,9 +574,7 @@ impl PiApp {
                     .old_leaf_id
                     .clone()
                     .map_or(Value::Null, Value::String);
-                let new_leaf_value = new_leaf_id
-                    .clone()
-                    .map_or(Value::Null, Value::String);
+                let new_leaf_value = new_leaf_id.clone().map_or(Value::Null, Value::String);
                 let mut tree_payload = serde_json::Map::new();
                 tree_payload.insert("newLeafId".to_string(), new_leaf_value);
                 tree_payload.insert("oldLeafId".to_string(), old_leaf_value);

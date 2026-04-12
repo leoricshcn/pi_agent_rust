@@ -1692,8 +1692,7 @@ where
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
-    let mut region =
-        region_override.map_or_else(|| region_default.to_string(), str::to_string);
+    let mut region = region_override.map_or_else(|| region_default.to_string(), str::to_string);
 
     let allow_config_region = region_override.is_none();
     if allow_config_region {
@@ -1707,26 +1706,26 @@ where
 
     if allow_config_region {
         if let Ok(config_text) = std::fs::read_to_string(&config_path) {
-        let config = parse_aws_ini(&config_text);
-        let mut candidates = Vec::new();
-        if profile_key == "default" {
-            candidates.push("default".to_string());
-            candidates.push("profile default".to_string());
-        } else {
-            candidates.push(format!("profile {profile_key}"));
-            candidates.push(profile_key.clone());
-        }
-        for name in candidates {
-            if let Some(section) = config.get(&name) {
-                if let Some(value) = section.get("region") {
-                    let trimmed = value.trim();
-                    if !trimmed.is_empty() {
-                        region = trimmed.to_string();
-                        break;
+            let config = parse_aws_ini(&config_text);
+            let mut candidates = Vec::new();
+            if profile_key == "default" {
+                candidates.push("default".to_string());
+                candidates.push("profile default".to_string());
+            } else {
+                candidates.push(format!("profile {profile_key}"));
+                candidates.push(profile_key.clone());
+            }
+            for name in candidates {
+                if let Some(section) = config.get(&name) {
+                    if let Some(value) = section.get("region") {
+                        let trimmed = value.trim();
+                        if !trimmed.is_empty() {
+                            region = trimmed.to_string();
+                            break;
+                        }
                     }
                 }
             }
-        }
         }
     }
 
@@ -7572,11 +7571,7 @@ mod tests {
             "[dev]\naws_access_key_id = AKIA_DEV\naws_secret_access_key = dev_secret\n",
         )
         .expect("write credentials");
-        std::fs::write(
-            &config_path,
-            "[profile dev]\nregion = us-west-2\n",
-        )
-        .expect("write config");
+        std::fs::write(&config_path, "[profile dev]\nregion = us-west-2\n").expect("write config");
 
         let result = resolve_aws_credentials_with_env(&auth, |var| match var {
             "AWS_PROFILE" => Some("dev".to_string()),
@@ -7620,8 +7615,7 @@ mod tests {
         )
         .expect("write credentials");
         let config_path = dir.path().join("config");
-        std::fs::write(&config_path, "[default]\nregion = us-east-1\n")
-            .expect("write config");
+        std::fs::write(&config_path, "[default]\nregion = us-east-1\n").expect("write config");
 
         let result = resolve_aws_credentials_with_env(&auth, |var| match var {
             "AWS_PROFILE" => Some("missing".to_string()),

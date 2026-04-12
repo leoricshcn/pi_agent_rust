@@ -89,6 +89,25 @@ struct ArtifactChecksum {
     sha256: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ApiUsageMatrix {
+    node_modules: Vec<ApiUsageModule>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiUsageModule {
+    module: String,
+    shim_status: String,
+    #[serde(default)]
+    apis: Vec<ApiUsageApi>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiUsageApi {
+    name: String,
+    shim_status: String,
+}
+
 #[test]
 fn test_compat_scanner_unit_fixture_ordering() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -217,6 +236,53 @@ fn test_ext_conformance_artifact_provenance_matches_master_catalog_checksums() {
             "artifact checksum mismatch for {id}"
         );
     }
+}
+
+#[test]
+fn test_api_usage_matrix_net_stub_contract() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let matrix_path = repo_root.join("tests/ext_conformance/api_usage_matrix.json");
+    let bytes = fs::read(&matrix_path).expect("read api_usage_matrix.json");
+    let matrix: ApiUsageMatrix =
+        serde_json::from_slice(&bytes).expect("parse api_usage_matrix.json");
+
+    let net = matrix
+        .node_modules
+        .iter()
+        .find(|entry| entry.module == "node:net")
+        .expect("node:net entry missing from api_usage_matrix.json");
+
+    assert_eq!(net.shim_status, "stub", "node:net should be stubbed");
+
+    let create_connection = net
+        .apis
+        .iter()
+        .find(|api| api.name == "createConnection")
+        .expect("node:net.createConnection missing from api_usage_matrix.json");
+    assert_eq!(
+        create_connection.shim_status, "stub",
+        "node:net.createConnection should be stubbed"
+    );
+
+    let create_server = net
+        .apis
+        .iter()
+        .find(|api| api.name == "createServer")
+        .expect("node:net.createServer missing from api_usage_matrix.json");
+    assert_eq!(
+        create_server.shim_status, "error_throw",
+        "node:net.createServer should throw in PiJS"
+    );
+
+    let socket = net
+        .apis
+        .iter()
+        .find(|api| api.name == "Socket")
+        .expect("node:net.Socket missing from api_usage_matrix.json");
+    assert_eq!(
+        socket.shim_status, "stub",
+        "node:net.Socket should be stubbed"
+    );
 }
 
 #[test]

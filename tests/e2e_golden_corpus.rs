@@ -190,12 +190,7 @@ impl GoldenTestHarness {
         self.run_binary(&args_refs, fixture.stdin.as_deref(), &run_env)
     }
 
-    fn setup_vcr(
-        &self,
-        scenario: &str,
-        cassette: &Value,
-        env: &mut BTreeMap<String, String>,
-    ) {
+    fn setup_vcr(&self, scenario: &str, cassette: &Value, env: &mut BTreeMap<String, String>) {
         let cassette_dir = self.harness.temp_path("vcr-cassettes");
         fs::create_dir_all(&cassette_dir).expect("create cassette dir");
 
@@ -332,9 +327,10 @@ fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOut
     let scenario = &fixture.scenario;
 
     // Exit code.
-    if fixture.expected.exit_code.is_some() && fixture.expected.exit_code_nonzero {
-        panic!("[{scenario}] fixture sets both exit_code and exit_code_nonzero");
-    }
+    assert!(
+        !(fixture.expected.exit_code.is_some() && fixture.expected.exit_code_nonzero),
+        "[{scenario}] fixture sets both exit_code and exit_code_nonzero"
+    );
     if let Some(expected_code) = fixture.expected.exit_code {
         assert_eq!(
             output.exit_code, expected_code,
@@ -498,7 +494,8 @@ fn parse_json_lines(stdout: &str) -> Result<Vec<Value>, String> {
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<Value>(line) {
+        let sanitized = line.strip_suffix('\r').unwrap_or(line);
+        match serde_json::from_str::<Value>(sanitized) {
             Ok(value) => lines.push(value),
             Err(err) => {
                 return Err(format!("line {}: {err}", idx + 1));
@@ -745,6 +742,15 @@ fn parse_json_lines_ignores_blank_lines() {
 
 "#;
     let lines = parse_json_lines(stdout).expect("valid JSON lines should parse");
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["type"], "session");
+    assert_eq!(lines[1]["type"], "agent_end");
+}
+
+#[test]
+fn parse_json_lines_accepts_crlf() {
+    let stdout = "{\n\"type\":\"session\",\"id\":\"abc\"}\r\n{\"type\":\"agent_end\"}\r\n";
+    let lines = parse_json_lines(stdout).expect("CRLF JSON lines should parse");
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["type"], "session");
     assert_eq!(lines[1]["type"], "agent_end");

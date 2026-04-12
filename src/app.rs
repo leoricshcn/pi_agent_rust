@@ -599,8 +599,8 @@ pub fn select_model_and_thinking(
             .and_then(parse_thinking_level_opt);
     }
 
-    let thinking_level = model_entry
-        .clamp_thinking_level(thinking_level.unwrap_or(model::ThinkingLevel::XHigh));
+    let thinking_level =
+        model_entry.clamp_thinking_level(thinking_level.unwrap_or(model::ThinkingLevel::XHigh));
 
     Ok(ModelSelection {
         model_entry,
@@ -1536,7 +1536,8 @@ mod tests {
         session.header.model_id = Some("gpt-5.4".to_string());
         session.header.thinking_level = Some("high".to_string());
 
-        let registry = registry_with_entries(vec![test_model_entry("gpt-5.4", "openai-codex", true)]);
+        let registry =
+            registry_with_entries(vec![test_model_entry("gpt-5.4", "openai-codex", true)]);
         let selection =
             select_model_and_thinking(&cli, &config, &session, &registry, &[], Path::new("/tmp"))
                 .expect("header-only session should restore saved thinking level");
@@ -1553,7 +1554,8 @@ mod tests {
             content: crate::model::UserContent::Text("root".to_string()),
             timestamp: Some(0),
         });
-        let openai_id = session.append_model_change("openai-codex".to_string(), "gpt-5.4".to_string());
+        let openai_id =
+            session.append_model_change("openai-codex".to_string(), "gpt-5.4".to_string());
         assert!(session.create_branch_from(&root_id));
         session.append_model_change("anthropic".to_string(), "claude-sonnet-4".to_string());
         assert!(session.create_branch_from(&openai_id));

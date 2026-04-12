@@ -9,11 +9,11 @@
 // Allow dead code and unused async during scaffolding phase - remove once implementation is complete
 #![allow(dead_code, clippy::unused_async)]
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, UNIX_EPOCH};
@@ -1174,9 +1174,7 @@ async fn run(
     {
         let allow_unresolved_scope = has_extensions && !scoped_patterns.is_empty();
         if scoped_models.is_empty() && !allow_unresolved_scope {
-            bail!(
-                "--api-key requires a model to be specified via --provider/--model or --models"
-            );
+            bail!("--api-key requires a model to be specified via --provider/--model or --models");
         }
     }
 
@@ -3317,9 +3315,7 @@ fn maybe_print_list_models_note<R: ModelTableRow>(rows: &[R], pattern: Option<&s
     let total = PROVIDER_METADATA.len();
 
     if shown < total {
-        println!(
-            "Showing {shown} of {total} providers. Run `pi --list-providers` to see all."
-        );
+        println!("Showing {shown} of {total} providers. Run `pi --list-providers` to see all.");
     }
 }
 

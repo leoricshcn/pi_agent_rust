@@ -125,9 +125,9 @@ fn parse_optional_u32_field(parsed: &Value, field: &str) -> Result<Option<u32>> 
     let Some(value) = parsed.get(field) else {
         return Ok(None);
     };
-    let number = value.as_u64().ok_or_else(|| {
-        Error::Validation(format!("{field} must be a non-negative integer"))
-    })?;
+    let number = value
+        .as_u64()
+        .ok_or_else(|| Error::Validation(format!("{field} must be a non-negative integer")))?;
     u32::try_from(number)
         .map(Some)
         .map_err(|_| Error::Validation(format!("{field} exceeds the maximum supported value")))
@@ -1477,11 +1477,8 @@ pub async fn run(
                     match parse_optional_u32_field(&parsed, "reserveTokens") {
                         Ok(value) => value,
                         Err(err) => {
-                            let _ = out_tx.send(response_error_with_hints(
-                                id.clone(),
-                                "compact",
-                                &err,
-                            ));
+                            let _ =
+                                out_tx.send(response_error_with_hints(id.clone(), "compact", &err));
                             continue;
                         }
                     };
@@ -1489,11 +1486,8 @@ pub async fn run(
                     match parse_optional_u32_field(&parsed, "keepRecentTokens") {
                         Ok(value) => value,
                         Err(err) => {
-                            let _ = out_tx.send(response_error_with_hints(
-                                id.clone(),
-                                "compact",
-                                &err,
-                            ));
+                            let _ =
+                                out_tx.send(response_error_with_hints(id.clone(), "compact", &err));
                             continue;
                         }
                     };
@@ -3362,7 +3356,9 @@ mod retry_tests {
                                 }
                             }
                             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                tracing::warn!("prompt(cancel-inherit): output channel disconnected");
+                                tracing::warn!(
+                                    "prompt(cancel-inherit): output channel disconnected"
+                                );
                                 break Value::Object(serde_json::Map::new());
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -3418,7 +3414,9 @@ mod retry_tests {
                                 }
                             }
                             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                tracing::warn!("prompt(cancel-inherit): output channel disconnected");
+                                tracing::warn!(
+                                    "prompt(cancel-inherit): output channel disconnected"
+                                );
                                 break (timeline, None);
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => {

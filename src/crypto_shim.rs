@@ -6,7 +6,7 @@
 
 use pbkdf2::pbkdf2_hmac;
 use rquickjs::prelude::Func;
-use scrypt::{scrypt, Params as ScryptParams};
+use scrypt::{Params as ScryptParams, scrypt};
 use sha2::{Digest, Sha256};
 use uuid::Builder;
 
@@ -247,23 +247,17 @@ fn register_pbkdf2_hostcall(global: &rquickjs::Object<'_>) -> rquickjs::Result<(
                     ));
                 }
                 if keylen > KDF_MAX_OUTPUT_BYTES {
-                    let msg = format!(
-                        "pbkdf2 keylen exceeds maximum ({KDF_MAX_OUTPUT_BYTES} bytes)"
-                    );
+                    let msg =
+                        format!("pbkdf2 keylen exceeds maximum ({KDF_MAX_OUTPUT_BYTES} bytes)");
                     return Err(rquickjs::Error::new_into_js_message(
-                        "number",
-                        "pbkdf2",
-                        msg,
+                        "number", "pbkdf2", msg,
                     ));
                 }
                 if iterations > KDF_MAX_PBKDF2_ITERATIONS {
-                    let msg = format!(
-                        "pbkdf2 iterations exceeds maximum ({KDF_MAX_PBKDF2_ITERATIONS})"
-                    );
+                    let msg =
+                        format!("pbkdf2 iterations exceeds maximum ({KDF_MAX_PBKDF2_ITERATIONS})");
                     return Err(rquickjs::Error::new_into_js_message(
-                        "number",
-                        "pbkdf2",
-                        msg,
+                        "number", "pbkdf2", msg,
                     ));
                 }
                 let password_bytes = password

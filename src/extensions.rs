@@ -996,7 +996,10 @@ fn is_js_like(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
-    matches!(ext, "ts" | "js" | "tsx" | "jsx" | "mjs" | "cjs" | "mts" | "cts")
+    matches!(
+        ext,
+        "ts" | "js" | "tsx" | "jsx" | "mjs" | "cjs" | "mts" | "cts"
+    )
 }
 
 fn relative_posix(root: &Path, path: &Path) -> String {
@@ -19085,9 +19088,7 @@ pub type ExtensionRuntimeHandle = native_runtime_duplicate_scaffold::ExtensionRu
 pub type NativeRustExtensionRuntimeHandle =
     native_runtime_duplicate_scaffold::NativeRustExtensionRuntimeHandle;
 
-const JS_EXTENSION_ENTRY_EXTS: &[&str] = &[
-    "ts", "tsx", "jsx", "js", "mjs", "cjs", "mts", "cts",
-];
+const JS_EXTENSION_ENTRY_EXTS: &[&str] = &["ts", "tsx", "jsx", "js", "mjs", "cjs", "mts", "cts"];
 const MAX_BUNDLE_CLUSTER_DIRS: usize = 40;
 const MAX_AUXILIARY_EXAMPLE_ENTRIES: usize = 24;
 const AUXILIARY_EXTENSION_DIR_NAMES: &[&str] = &["examples", "example", "demos", "demo"];
@@ -22818,26 +22819,22 @@ async fn dispatch_hostcall_exec_ref_with_limit(
             let (tx_stream, rx_stream) = mpsc::sync_channel::<ExecStreamFrame>(1024);
             let stdout_tx = tx_stream.clone();
 
-            let _stdout_handle =
-                thread::spawn(move || pump_stream(stdout, &stdout_tx, true));
-            let _stderr_handle =
-                thread::spawn(move || pump_stream(stderr, &tx_stream, false));
+            let _stdout_handle = thread::spawn(move || pump_stream(stdout, &stdout_tx, true));
+            let _stderr_handle = thread::spawn(move || pump_stream(stderr, &tx_stream, false));
 
             let start = Instant::now();
             let mut killed = false;
             let mut stdout_acc = String::new();
             let mut stderr_acc = String::new();
 
-            let mut ingest_frame = |frame: ExecStreamFrame| {
-                match frame {
-                    ExecStreamFrame::Stdout(s) if (stdout_acc.len() as u64) < max_capture_bytes => {
-                        stdout_acc.push_str(&s);
-                    }
-                    ExecStreamFrame::Stderr(s) if (stderr_acc.len() as u64) < max_capture_bytes => {
-                        stderr_acc.push_str(&s);
-                    }
-                    _ => {}
+            let mut ingest_frame = |frame: ExecStreamFrame| match frame {
+                ExecStreamFrame::Stdout(s) if (stdout_acc.len() as u64) < max_capture_bytes => {
+                    stdout_acc.push_str(&s);
                 }
+                ExecStreamFrame::Stderr(s) if (stderr_acc.len() as u64) < max_capture_bytes => {
+                    stderr_acc.push_str(&s);
+                }
+                _ => {}
             };
 
             let status = loop {
@@ -28495,11 +28492,7 @@ impl ExtensionManager {
         self.dispatch_event_value(event, data, timeout_ms).await
     }
 
-    pub async fn discover_resources(
-        &self,
-        cwd: &Path,
-        reason: &str,
-    ) -> ExtensionResourcePaths {
+    pub async fn discover_resources(&self, cwd: &Path, reason: &str) -> ExtensionResourcePaths {
         let payload = json!({
             "cwd": cwd.display().to_string(),
             "reason": reason,

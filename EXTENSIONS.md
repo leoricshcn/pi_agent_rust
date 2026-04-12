@@ -1563,11 +1563,13 @@ The runtime also exposes a focused Bun subset through both `globalThis.Bun` and
 - `Bun.which(command)`
 - `Bun.spawn(command, options)` / `Bun.spawn([cmd, ...args], options)`
 
-Unsupported Bun APIs are explicit:
+Compatibility stubs are provided for Bun socket APIs, but they do **not**
+create real network connections:
 
-- `Bun.connect(...)` — **not supported** (use `pi.http(...)` or `node:http`)
-- `Bun.listen(...)` — **not supported** (extension runtime does not expose raw
-  socket/server listeners)
+- `Bun.connect(...)` — stubbed in-memory socket emitter (no network I/O)
+- `Bun.listen(...)` — stubbed in-memory server emitter (no network I/O)
+
+For real network access, use `pi.http(...)` or `node:http`.
 
 If an extension requires unsupported Bun APIs, keep the extension unchanged and
 address it via runtime compatibility work (new generic shim/connector support)

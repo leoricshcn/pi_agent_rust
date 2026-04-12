@@ -537,20 +537,17 @@ fn pbkdf2_sync_derives_expected_key() {
     let result =
         eval_crypto(r#"pbkdf2Sync("password", "salt", 1000, 16, "sha256").toString("hex")"#);
     assert_eq!(
-        result,
-        "632c2812e46d4604102ba7618e9d6d7d",
+        result, "632c2812e46d4604102ba7618e9d6d7d",
         "pbkdf2Sync derived key mismatch"
     );
 }
 
 #[test]
 fn pbkdf2_sync_accepts_digest_variants() {
-    let result = eval_crypto(
-        r#"pbkdf2Sync("password", "salt", 1000, 16, "SHA-256").toString("hex")"#,
-    );
+    let result =
+        eval_crypto(r#"pbkdf2Sync("password", "salt", 1000, 16, "SHA-256").toString("hex")"#);
     assert_eq!(
-        result,
-        "632c2812e46d4604102ba7618e9d6d7d",
+        result, "632c2812e46d4604102ba7618e9d6d7d",
         "pbkdf2Sync should accept digest variants"
     );
 }
@@ -567,8 +564,7 @@ fn pbkdf2_async_derives_expected_key() {
     })()"#,
     );
     assert_eq!(
-        result,
-        "632c2812e46d4604102ba7618e9d6d7d",
+        result, "632c2812e46d4604102ba7618e9d6d7d",
         "pbkdf2 async derived key mismatch"
     );
 }
@@ -595,8 +591,7 @@ fn pbkdf2_sync_rejects_large_iterations() {
 fn scrypt_sync_derives_expected_key() {
     let result = eval_crypto(r#"scryptSync("password", "salt", 16).toString("hex")"#);
     assert_eq!(
-        result,
-        "745731af4484f323968969eda289aeee",
+        result, "745731af4484f323968969eda289aeee",
         "scryptSync derived key mismatch"
     );
 }
@@ -605,8 +600,7 @@ fn scrypt_sync_derives_expected_key() {
 fn scrypt_sync_accepts_encoding_string() {
     let result = eval_crypto(r#"scryptSync("password", "salt", 16, "hex")"#);
     assert_eq!(
-        result,
-        "745731af4484f323968969eda289aeee",
+        result, "745731af4484f323968969eda289aeee",
         "scryptSync hex encoding mismatch"
     );
 }

@@ -5,16 +5,16 @@
 //! normalized response shape.
 
 use crate::connectors::{
-    Connector, host_result_err, host_result_err_with_details, host_result_ok, HostCallErrorCode,
-    HostCallPayload, HostResultPayload,
+    Connector, HostCallErrorCode, HostCallPayload, HostResultPayload, host_result_err,
+    host_result_err_with_details, host_result_ok,
 };
 use crate::error::{Error, Result};
 use crate::http::client::Client;
-use asupersync::http::h1::{ClientError, ParsedUrl};
 use asupersync::http::h1::http_client::Scheme;
+use asupersync::http::h1::{ClientError, ParsedUrl};
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -80,12 +80,7 @@ fn io_error(call_id: &str, message: impl Into<String>) -> HostResultPayload {
 }
 
 fn timeout_error(call_id: &str, message: impl Into<String>) -> HostResultPayload {
-    host_result_err(
-        call_id,
-        HostCallErrorCode::Timeout,
-        message,
-        Some(true),
-    )
+    host_result_err(call_id, HostCallErrorCode::Timeout, message, Some(true))
 }
 
 fn sanitize_invalid_url_reason(err: &ClientError) -> String {
@@ -286,7 +281,7 @@ impl HttpConnector {
                 return Err(Box::new(invalid_request(
                     &call.call_id,
                     format!("Invalid URL: {reason}"),
-                )))
+                )));
             }
         };
 
@@ -352,9 +347,7 @@ impl HttpConnector {
         }
 
         let body_val = params.get("body");
-        let body_bytes_val = params
-            .get("body_bytes")
-            .or_else(|| params.get("bodyBytes"));
+        let body_bytes_val = params.get("body_bytes").or_else(|| params.get("bodyBytes"));
 
         if body_val.is_some() && body_bytes_val.is_some() {
             return Err(Box::new(invalid_request(
@@ -409,7 +402,7 @@ impl HttpConnector {
                     return Err(Box::new(invalid_request(
                         &call.call_id,
                         format!("Invalid base64 body_bytes: {err}"),
-                    )))
+                    )));
                 }
             };
             Some(decoded)

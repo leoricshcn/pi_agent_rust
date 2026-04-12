@@ -29,7 +29,7 @@ Generated: 2026-02-07 | Corpus: 1,167 files across 230 extensions
 | `node:util` | 15 | 1 | 4 | 10 | Partial | P2 |
 | `node:module` | 10 | 1 | 3 | 6 | Real | P2 |
 | `node:readline` | 9 | - | 1 | 8 | Stub | P2 |
-| `node:net` | 7 | - | 1 | 6 | Error | P3 |
+| `node:net` | 7 | - | 1 | 6 | Stub | P3 |
 | `node:test` | 7 | - | - | 7 | Partial | P3 |
 | `node:assert/strict` | 7 | - | - | 7 | **Missing** | P3 |
 | `node:http` | 6 | - | 1 | 5 | External | P2 |
@@ -134,7 +134,7 @@ All P0 modules (path, fs, os, child_process) have real implementations.
 
 ### P3 Gaps (low priority)
 - `child_process.fork` (72 calls) - throws error, not feasible in QuickJS
-- `node:net` (7 ext) - all error throws, socket ops not feasible
+- `node:net` (7 ext) - stubbed sockets (no network I/O)
 - `node:test` (7 ext) - partial runner (test/describe/it + hooks + run); reporters/concurrency not supported
 - `node:assert/strict` (7 ext) - variant of existing assert
 - 6 modules with 1 ext each: tty, zlib, v8, perf_hooks, vm, stream/web

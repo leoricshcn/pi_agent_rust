@@ -982,14 +982,16 @@ pub(crate) fn inject_wasm_globals(
         let st = Rc::clone(state);
         global.set(
             "__pi_wasm_validate_native",
-            Func::from(move |ctx: Ctx<'_>, bytes_val: Value<'_>| -> rquickjs::Result<bool> {
-                let bytes = extract_bytes(&ctx, &bytes_val)?;
-                if bytes.len() > MAX_VIRTUAL_FILE_BYTES {
-                    return Ok(false);
-                }
-                let bridge = st.borrow();
-                Ok(WasmModule::from_binary(&bridge.engine, &bytes).is_ok())
-            }),
+            Func::from(
+                move |ctx: Ctx<'_>, bytes_val: Value<'_>| -> rquickjs::Result<bool> {
+                    let bytes = extract_bytes(&ctx, &bytes_val)?;
+                    if bytes.len() > MAX_VIRTUAL_FILE_BYTES {
+                        return Ok(false);
+                    }
+                    let bridge = st.borrow();
+                    Ok(WasmModule::from_binary(&bridge.engine, &bytes).is_ok())
+                },
+            ),
         )?;
     }
 
@@ -1538,29 +1540,134 @@ const WASM_POLYFILL_JS: &str = r#"
       if (!(this instanceof WebAssembly.Memory)) {
         throw new TypeError("WebAssembly.Memory must be called with new");
       }
-      var initial = descriptor && descriptor.initial ? descriptor.initial : 0;
-      this._pages = initial;
-      this._buffer = new ArrayBuffer(initial * 65536);
+      var initial = descriptor && descriptor.initial !== undefined ? descriptor.initial : 0;
+      var maximum = descriptor && descriptor.maximum !== undefined ? descriptor.maximum : undefined;
+      var initialInt = Number(initial);
+      if (!Number.isFinite(initialInt) || initialInt < 0 || Math.floor(initialInt) !== initialInt) {
+        throw new RangeError("WebAssembly.Memory: invalid initial size");
+      }
+      var maxInt = maximum === undefined ? undefined : Number(maximum);
+      if (maxInt !== undefined) {
+        if (!Number.isFinite(maxInt) || maxInt < 0 || Math.floor(maxInt) !== maxInt) {
+          throw new RangeError("WebAssembly.Memory: invalid maximum size");
+        }
+        if (maxInt < initialInt) {
+          throw new RangeError("WebAssembly.Memory: maximum size smaller than initial");
+        }
+      }
+      this._pages = initialInt;
+      this._maximum = maxInt;
+      this._buffer = new ArrayBuffer(this._pages * 65536);
       Object.defineProperty(this, "buffer", {
         get: function() { return this._buffer; },
         configurable: true
       });
       this.grow = function(delta) {
+        var deltaInt = Number(delta);
+        if (!Number.isFinite(deltaInt) || deltaInt < 0 || Math.floor(deltaInt) !== deltaInt) {
+          throw new RangeError("WebAssembly.Memory.grow(): invalid delta");
+        }
         var old = this._pages;
-        this._pages += delta;
-        var nextBuffer = new ArrayBuffer(this._pages * 65536);
+        var next = old + deltaInt;
+        if (this._maximum !== undefined && next > this._maximum) {
+          throw new RangeError("WebAssembly.Memory.grow(): maximum size exceeded");
+        }
+        var nextBuffer = new ArrayBuffer(next * 65536);
         new Uint8Array(nextBuffer).set(new Uint8Array(this._buffer));
         this._buffer = nextBuffer;
+        this._pages = next;
         return old;
       };
     },
 
-    Table: function() {
-      throw new Error("WebAssembly.Table not yet supported in PiJS");
+    Table: function(descriptor) {
+      if (!(this instanceof WebAssembly.Table)) {
+        throw new TypeError("WebAssembly.Table must be called with new");
+      }
+      var initial = descriptor && descriptor.initial !== undefined ? descriptor.initial : 0;
+      var maximum = descriptor && descriptor.maximum !== undefined ? descriptor.maximum : undefined;
+      var initialInt = Number(initial);
+      if (!Number.isFinite(initialInt) || initialInt < 0 || Math.floor(initialInt) !== initialInt) {
+        throw new RangeError("WebAssembly.Table: invalid initial size");
+      }
+      var maxInt = maximum === undefined ? undefined : Number(maximum);
+      if (maxInt !== undefined) {
+        if (!Number.isFinite(maxInt) || maxInt < 0 || Math.floor(maxInt) !== maxInt) {
+          throw new RangeError("WebAssembly.Table: invalid maximum size");
+        }
+        if (maxInt < initialInt) {
+          throw new RangeError("WebAssembly.Table: maximum size smaller than initial");
+        }
+      }
+      var element = descriptor && descriptor.element ? String(descriptor.element) : "anyfunc";
+      if (element !== "anyfunc" && element !== "funcref" && element !== "externref") {
+        throw new TypeError("WebAssembly.Table: invalid element type");
+      }
+      this._element = element;
+      this._maximum = maxInt;
+      this._values = new Array(initialInt);
+      for (var i = 0; i < initialInt; i++) this._values[i] = null;
+      Object.defineProperty(this, "length", {
+        get: function() { return this._values.length; },
+        configurable: true
+      });
+      this.get = function(index) {
+        var indexInt = Number(index);
+        if (!Number.isFinite(indexInt) || indexInt < 0 || Math.floor(indexInt) !== indexInt) {
+          throw new RangeError("WebAssembly.Table.get(): invalid index");
+        }
+        if (indexInt >= this._values.length) {
+          throw new RangeError("WebAssembly.Table.get(): index out of bounds");
+        }
+        return this._values[indexInt];
+      };
+      this.set = function(index, value) {
+        var indexInt = Number(index);
+        if (!Number.isFinite(indexInt) || indexInt < 0 || Math.floor(indexInt) !== indexInt) {
+          throw new RangeError("WebAssembly.Table.set(): invalid index");
+        }
+        if (indexInt >= this._values.length) {
+          throw new RangeError("WebAssembly.Table.set(): index out of bounds");
+        }
+        this._values[indexInt] = value;
+      };
+      this.grow = function(delta, value) {
+        var deltaInt = Number(delta);
+        if (!Number.isFinite(deltaInt) || deltaInt < 0 || Math.floor(deltaInt) !== deltaInt) {
+          throw new RangeError("WebAssembly.Table.grow(): invalid delta");
+        }
+        var old = this._values.length;
+        var next = old + deltaInt;
+        if (this._maximum !== undefined && next > this._maximum) {
+          throw new RangeError("WebAssembly.Table.grow(): maximum size exceeded");
+        }
+        for (var i = old; i < next; i++) {
+          this._values[i] = value === undefined ? null : value;
+        }
+        return old;
+      };
     },
 
-    Global: function() {
-      throw new Error("WebAssembly.Global not yet supported in PiJS");
+    Global: function(descriptor, value) {
+      if (!(this instanceof WebAssembly.Global)) {
+        throw new TypeError("WebAssembly.Global must be called with new");
+      }
+      var valType = descriptor && descriptor.value ? String(descriptor.value) : "i32";
+      var mutable = descriptor && descriptor.mutable ? true : false;
+      this._type = valType;
+      this._mutable = mutable;
+      this._value = value;
+      Object.defineProperty(this, "value", {
+        get: function() { return this._value; },
+        set: function(next) {
+          if (!this._mutable) {
+            throw new TypeError("WebAssembly.Global is immutable");
+          }
+          this._value = next;
+        },
+        configurable: true
+      });
+      this.valueOf = function() { return this._value; };
     }
   };
 })();
@@ -1895,6 +2002,88 @@ mod tests {
 
             assert!(result);
             assert_eq!(before, after);
+        });
+    }
+
+    #[test]
+    fn js_polyfill_webassembly_table_basic() {
+        run_wasm_test(|ctx, _state| {
+            ctx.eval::<(), _>(
+                r#"
+                const table = new WebAssembly.Table({ element: "funcref", initial: 2, maximum: 3 });
+                if (table.length !== 2) throw new Error("table length mismatch");
+                table.set(0, function() { return 1; });
+                if (typeof table.get(0) !== "function") throw new Error("table get failed");
+                const old = table.grow(1);
+                if (old !== 2 || table.length !== 3) throw new Error("table grow failed");
+                let threw = false;
+                try { table.grow(1); } catch (e) { threw = true; }
+                if (!threw) throw new Error("table maximum not enforced");
+                "#,
+            )
+            .expect("table polyfill");
+        });
+    }
+
+    #[test]
+    fn js_polyfill_webassembly_table_validation() {
+        run_wasm_test(|ctx, _state| {
+            let result: bool = ctx
+                .eval(
+                    r#"
+                    const table = new WebAssembly.Table({ element: "funcref", initial: 1, maximum: 2 });
+                    let ok = false;
+                    try { table.get(0.5); } catch (e) { ok = e instanceof RangeError; }
+                    if (!ok) return false;
+                    ok = false;
+                    try { table.grow(1.25); } catch (e) { ok = e instanceof RangeError; }
+                    if (!ok) return false;
+                    ok = false;
+                    try { table.grow(2); } catch (e) { ok = e instanceof RangeError; }
+                    return ok;
+                    "#,
+                )
+                .expect("table validation");
+            assert!(result);
+        });
+    }
+
+    #[test]
+    fn js_polyfill_webassembly_memory_validation() {
+        run_wasm_test(|ctx, _state| {
+            let result: bool = ctx
+                .eval(
+                    r"
+                    const mem = new WebAssembly.Memory({ initial: 1, maximum: 1 });
+                    let ok = false;
+                    try { mem.grow(0.5); } catch (e) { ok = e instanceof RangeError; }
+                    if (!ok) return false;
+                    ok = false;
+                    try { mem.grow(1); } catch (e) { ok = e instanceof RangeError; }
+                    return ok;
+                    ",
+                )
+                .expect("memory validation");
+            assert!(result);
+        });
+    }
+
+    #[test]
+    fn js_polyfill_webassembly_global_basic() {
+        run_wasm_test(|ctx, _state| {
+            ctx.eval::<(), _>(
+                r#"
+                const g = new WebAssembly.Global({ value: "i32", mutable: true }, 1);
+                if (g.value !== 1) throw new Error("global value mismatch");
+                g.value = 2;
+                if (g.value !== 2) throw new Error("global set failed");
+                const imm = new WebAssembly.Global({ value: "i32" }, 7);
+                let threw = false;
+                try { imm.value = 9; } catch (e) { threw = true; }
+                if (!threw) throw new Error("immutable global should throw");
+                "#,
+            )
+            .expect("global polyfill");
         });
     }
 

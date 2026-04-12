@@ -114,16 +114,17 @@ debugger;
 "#;
     let r = classify(src);
     assert_eq!(r.recommendation, InstallRecommendation::Block);
-    // eval(Critical=30) + hardcoded_secret(High=20) + debugger(Low=3) + preflight_error(15) = 68 deductions
-    // Score: 100 - 68 = 32
+    // eval(Critical=30) + hardcoded_secret(High=20) + debugger(Low=3) + preflight_warning(5) = 58 deductions
+    // Score: 100 - 58 = 42
     assert!(
-        r.composite_risk_score < 40,
-        "score {} should be < 40 for combined critical+high+low findings",
+        r.composite_risk_score < 50,
+        "score {} should be < 50 for combined critical+high+low findings",
         r.composite_risk_score
     );
     assert_eq!(r.composite_risk_tier, RiskTier::Critical);
     // Both preflight and security should have findings.
-    assert!(r.preflight_summary.errors > 0);
+    assert!(r.preflight_summary.warnings > 0);
+    assert_eq!(r.preflight_summary.errors, 0);
     assert!(r.security_summary.critical > 0);
 }
 
@@ -131,8 +132,9 @@ debugger;
 fn classify_incompatible_module_raises_risk() {
     let r = classify(r#"import net from "node:net";"#);
     assert!(r.composite_risk_score < 100);
-    assert!(r.preflight_summary.errors > 0);
-    assert_eq!(r.preflight_summary.verdict, PreflightVerdict::Fail);
+    assert_eq!(r.preflight_summary.errors, 0);
+    assert!(r.preflight_summary.warnings > 0);
+    assert_eq!(r.preflight_summary.verdict, PreflightVerdict::Warn);
 }
 
 // ============================================================================

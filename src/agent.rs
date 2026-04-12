@@ -1831,8 +1831,7 @@ impl Agent {
             error_message: None,
             timestamp: Utc::now().timestamp_millis(),
         };
-        self.messages
-            .push(Message::Assistant(Arc::new(message)));
+        self.messages.push(Message::Assistant(Arc::new(message)));
         *added_partial = true;
     }
 
@@ -6208,9 +6207,7 @@ impl AgentSession {
                 reason: "threshold".to_string(),
             });
 
-            let before_outcome = self
-                .dispatch_before_compact(&prep, &entries, None)
-                .await;
+            let before_outcome = self.dispatch_before_compact(&prep, &entries, None).await;
             if before_outcome.cancel {
                 on_event(AgentEvent::AutoCompactionEnd {
                     result: None,
@@ -6225,14 +6222,15 @@ impl AgentSession {
                 let result_value = compaction.details.clone();
                 self.extensions_is_compacting
                     .store(true, std::sync::atomic::Ordering::SeqCst);
-                let apply_result = self.apply_compaction_entry(
-                    compaction.summary,
-                    compaction.first_kept_entry_id,
-                    compaction.tokens_before,
-                    compaction.details,
-                    true,
-                )
-                .await;
+                let apply_result = self
+                    .apply_compaction_entry(
+                        compaction.summary,
+                        compaction.first_kept_entry_id,
+                        compaction.tokens_before,
+                        compaction.details,
+                        true,
+                    )
+                    .await;
                 self.extensions_is_compacting
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 apply_result?;
@@ -6401,9 +6399,7 @@ impl AgentSession {
                 reason: "threshold".to_string(),
             });
 
-            let before_outcome = self
-                .dispatch_before_compact(&prep, &entries, None)
-                .await;
+            let before_outcome = self.dispatch_before_compact(&prep, &entries, None).await;
             if before_outcome.cancel {
                 on_event(AgentEvent::AutoCompactionEnd {
                     result: None,
@@ -6418,14 +6414,15 @@ impl AgentSession {
                 let result_value = compaction.details.clone();
                 self.extensions_is_compacting
                     .store(true, std::sync::atomic::Ordering::SeqCst);
-                let apply_result = self.apply_compaction_entry(
-                    compaction.summary,
-                    compaction.first_kept_entry_id,
-                    compaction.tokens_before,
-                    compaction.details,
-                    true,
-                )
-                .await;
+                let apply_result = self
+                    .apply_compaction_entry(
+                        compaction.summary,
+                        compaction.first_kept_entry_id,
+                        compaction.tokens_before,
+                        compaction.details,
+                        true,
+                    )
+                    .await;
                 self.extensions_is_compacting
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 apply_result?;
@@ -7069,9 +7066,7 @@ impl AgentSession {
             .await;
 
         match response {
-            Ok(value) => {
-                apply_session_before_compact_response(value, preparation.tokens_before)
-            }
+            Ok(value) => apply_session_before_compact_response(value, preparation.tokens_before),
             Err(err) => {
                 tracing::warn!("session_before_compact extension hook failed (fail-open): {err}");
                 SessionBeforeCompactOutcome::default()
@@ -7166,11 +7161,7 @@ impl AgentSession {
                 messages: custom_messages,
                 system_prompt,
             } = self
-                .dispatch_before_agent_start(
-                    "",
-                    &[],
-                    base_system_prompt.as_deref().unwrap_or(""),
-                )
+                .dispatch_before_agent_start("", &[], base_system_prompt.as_deref().unwrap_or(""))
                 .await;
             if let Some(prompt) = system_prompt {
                 self.agent.set_system_prompt(Some(prompt));

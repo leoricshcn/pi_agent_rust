@@ -171,8 +171,7 @@ impl PiApp {
             provider_impl,
             resolved_key_opt.as_deref(),
             "selector",
-        )
-        {
+        ) {
             self.status_message = Some(message);
             return;
         }

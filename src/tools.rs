@@ -2303,7 +2303,10 @@ fn normalize_to_lf(text: &str) -> String {
     out
 }
 
-fn normalize_line_endings_chunk<'a>(chunk: &'a [u8], pending_cr: &mut bool) -> std::borrow::Cow<'a, [u8]> {
+fn normalize_line_endings_chunk<'a>(
+    chunk: &'a [u8],
+    pending_cr: &mut bool,
+) -> std::borrow::Cow<'a, [u8]> {
     if !*pending_cr && memchr::memchr(b'\r', chunk).is_none() {
         return std::borrow::Cow::Borrowed(chunk);
     }
@@ -2875,16 +2878,18 @@ impl Tool for EditTool {
         let absolute_path = resolve_read_path(&input.path, &self.cwd);
         let absolute_path = enforce_cwd_scope(&absolute_path, &self.cwd, "edit")?;
 
-        let meta = asupersync::fs::metadata(&absolute_path).await.map_err(|err| {
-            let message = match err.kind() {
-                std::io::ErrorKind::NotFound => format!("File not found: {}", input.path),
-                std::io::ErrorKind::PermissionDenied => {
-                    format!("Permission denied: {}", input.path)
-                }
-                _ => format!("Failed to access file {}: {err}", input.path),
-            };
-            Error::tool("edit", message)
-        })?;
+        let meta = asupersync::fs::metadata(&absolute_path)
+            .await
+            .map_err(|err| {
+                let message = match err.kind() {
+                    std::io::ErrorKind::NotFound => format!("File not found: {}", input.path),
+                    std::io::ErrorKind::PermissionDenied => {
+                        format!("Permission denied: {}", input.path)
+                    }
+                    _ => format!("Failed to access file {}: {err}", input.path),
+                };
+                Error::tool("edit", message)
+            })?;
 
         if !meta.is_file() {
             return Err(Error::tool(
@@ -2950,12 +2955,12 @@ impl Tool for EditTool {
 
         let original_ending = detect_line_ending(content_no_bom);
         let normalized_content = normalize_to_lf(content_no_bom);
-        let content_for_matching = if content_no_bom.contains('\r') && !content_no_bom.contains('\n')
-        {
-            std::borrow::Cow::Owned(content_no_bom.replace('\r', "\n"))
-        } else {
-            std::borrow::Cow::Borrowed(content_no_bom)
-        };
+        let content_for_matching =
+            if content_no_bom.contains('\r') && !content_no_bom.contains('\n') {
+                std::borrow::Cow::Owned(content_no_bom.replace('\r', "\n"))
+            } else {
+                std::borrow::Cow::Borrowed(content_no_bom)
+            };
         let normalized_old_text = normalize_to_lf(&input.old_text);
 
         if normalized_old_text.is_empty() {
@@ -5824,9 +5829,8 @@ mod tests {
         let mut match_limit_reached = false;
         let scan_limit = 1;
 
-        let missing_line = Ok(
-            r#"{"type":"match","data":{"path":{"text":"file.txt"}}}"#.to_string(),
-        );
+        let missing_line =
+            Ok(r#"{"type":"match","data":{"path":{"text":"file.txt"}}}"#.to_string());
         process_rg_json_match_line(
             missing_line,
             &mut matches,
@@ -5839,8 +5843,7 @@ mod tests {
         assert!(!match_limit_reached);
 
         let valid_line = Ok(
-            r#"{"type":"match","data":{"path":{"text":"file.txt"},"line_number":3}}"#
-                .to_string(),
+            r#"{"type":"match","data":{"path":{"text":"file.txt"},"line_number":3}}"#.to_string(),
         );
         process_rg_json_match_line(
             valid_line,
