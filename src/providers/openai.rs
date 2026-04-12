@@ -1048,7 +1048,12 @@ fn convert_message_to_openai(message: &Message) -> Vec<OpenAIMessage<'_>> {
                 .collect();
 
             let content = if text.is_empty() {
-                None
+                // Send empty string instead of omitting the field. Some
+                // OpenAI-compatible providers (e.g. GLM via Ollama Cloud) reject
+                // requests where assistant messages have no content field.
+                // An empty string is valid per the OpenAI spec and accepted
+                // by all known providers.
+                Some(OpenAIContent::Text(Cow::Borrowed("")))
             } else {
                 Some(OpenAIContent::Text(Cow::Owned(text)))
             };
