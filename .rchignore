@@ -14,6 +14,8 @@ codex_fresheyes/
 codex_fresheyes/**
 codex_testinginfra/
 codex_testinginfra/**
+codex-clippy/
+codex-clippy/**
 cloudyknoll/
 cloudyknoll/**
 target/
