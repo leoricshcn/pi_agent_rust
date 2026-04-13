@@ -135,6 +135,10 @@ impl SseParser {
             .saturating_add(value.len())
             .saturating_add(1);
         if projected_len > max_event_data_bytes {
+            // Preserve the event boundary even when we drop this data line.
+            // This avoids silently skipping oversized events, which can cause
+            // downstream state machines to hang waiting for a completion event.
+            *has_data = true;
             return;
         }
         current.data.push_str(value);
@@ -1030,14 +1034,12 @@ mod tests {
 
     #[test]
     fn test_data_cap_single_oversized_line_via_feed() {
-        // A single data line whose value exceeds the cap must be dropped entirely.
+        // A single oversized data line should still emit an event boundary
+        // (with empty data) rather than being silently dropped.
         let mut parser = SseParser::with_max_event_data_bytes(10);
         let events = parser.feed("data: this-is-longer-than-ten-bytes\n\n");
-        assert_eq!(
-            events.len(),
-            0,
-            "oversized-only event should not emit (no data flag set)"
-        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "");
     }
 
     #[test]

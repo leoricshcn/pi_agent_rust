@@ -410,6 +410,60 @@ pub struct Response {
     timeout_info: Option<(asupersync::Time, std::time::Duration)>,
 }
 
+fn wrap_stream_with_idle_timeout(
+    stream: Pin<Box<dyn Stream<Item = std::io::Result<Vec<u8>>> + Send>>,
+    timeout_info: Option<(asupersync::Time, std::time::Duration)>,
+) -> Pin<Box<dyn Stream<Item = std::io::Result<Vec<u8>>> + Send>> {
+    let Some((start_time, timeout)) = timeout_info else {
+        return stream;
+    };
+
+    Box::pin(futures::stream::unfold(
+        (stream, start_time, timeout),
+        |(mut stream, mut last_activity, timeout)| async move {
+            use asupersync::time::{sleep, wall_now};
+            use futures::future::{Either, FutureExt, select};
+
+            let asupersync_now = asupersync::Cx::current()
+                .and_then(|cx| cx.timer_driver())
+                .map_or_else(wall_now, |timer| timer.now());
+
+            let elapsed =
+                std::time::Duration::from_nanos(asupersync_now.duration_since(last_activity));
+            if elapsed >= timeout {
+                return Some((
+                    Err(std::io::Error::other(
+                        "Request timed out reading body stream",
+                    )),
+                    (stream, last_activity, timeout),
+                ));
+            }
+
+            let remaining = timeout.checked_sub(elapsed).unwrap_or_default();
+            let sleep_fut = sleep(asupersync_now, remaining).fuse();
+            let next_fut = stream.next().fuse();
+            futures::pin_mut!(sleep_fut, next_fut);
+
+            match select(next_fut, sleep_fut).await {
+                Either::Left((Some(res), _)) => {
+                    let now = asupersync::Cx::current()
+                        .and_then(|cx| cx.timer_driver())
+                        .map_or_else(wall_now, |timer| timer.now());
+                    last_activity = now;
+                    Some((res, (stream, last_activity, timeout)))
+                }
+                Either::Left((None, _)) => None,
+                Either::Right(_) => Some((
+                    Err(std::io::Error::other(
+                        "Request timed out reading body stream",
+                    )),
+                    (stream, last_activity, timeout),
+                )),
+            }
+        },
+    ))
+}
+
 impl Response {
     #[must_use]
     pub const fn status(&self) -> u16 {
@@ -423,92 +477,31 @@ impl Response {
 
     #[must_use]
     pub fn bytes_stream(self) -> Pin<Box<dyn Stream<Item = std::io::Result<Vec<u8>>> + Send>> {
-        if let Some((start_time, timeout)) = self.timeout_info {
-            let stream = self.stream;
-            Box::pin(futures::stream::unfold(
-                (stream, start_time, timeout),
-                |(mut stream, start_time, timeout)| async move {
-                    use asupersync::time::{sleep, wall_now};
-                    use futures::future::{Either, FutureExt, select};
-
-                    let asupersync_now = asupersync::Cx::current()
-                        .and_then(|cx| cx.timer_driver())
-                        .map_or_else(wall_now, |timer| timer.now());
-
-                    let elapsed =
-                        std::time::Duration::from_nanos(asupersync_now.duration_since(start_time));
-                    if elapsed >= timeout {
-                        return Some((
-                            Err(std::io::Error::other(
-                                "Request timed out reading body stream",
-                            )),
-                            (stream, start_time, timeout),
-                        ));
-                    }
-
-                    let remaining = timeout.checked_sub(elapsed).unwrap_or_default();
-                    let sleep_fut = sleep(asupersync_now, remaining).fuse();
-                    let next_fut = stream.next().fuse();
-                    futures::pin_mut!(sleep_fut, next_fut);
-
-                    match select(next_fut, sleep_fut).await {
-                        Either::Left((Some(res), _)) => Some((res, (stream, start_time, timeout))),
-                        Either::Left((None, _)) => None,
-                        Either::Right(_) => Some((
-                            Err(std::io::Error::other(
-                                "Request timed out reading body stream",
-                            )),
-                            (stream, start_time, timeout),
-                        )),
-                    }
-                },
-            ))
-        } else {
-            self.stream
-        }
+        wrap_stream_with_idle_timeout(self.stream, self.timeout_info)
     }
 
     pub async fn text(self) -> Result<String> {
-        let timeout_info = self.timeout_info;
-        let read_fut = self
-            .stream
+        let stream = wrap_stream_with_idle_timeout(self.stream, self.timeout_info);
+        let bytes = stream
             .try_fold(Vec::new(), |mut acc, chunk| async move {
                 if acc.len().saturating_add(chunk.len()) > MAX_TEXT_BODY_BYTES {
                     return Err(std::io::Error::other("response body too large"));
                 }
                 acc.extend_from_slice(&chunk);
                 Ok::<_, std::io::Error>(acc)
-            });
-
-        let bytes = if let Some((start_time, timeout)) = timeout_info {
-            use asupersync::time::{sleep, wall_now};
-            use futures::future::{Either, FutureExt, select};
-
-            let asupersync_now = asupersync::Cx::current()
-                .and_then(|cx| cx.timer_driver())
-                .map_or_else(wall_now, |timer| timer.now());
-
-            let elapsed =
-                std::time::Duration::from_nanos(asupersync_now.duration_since(start_time));
-            if elapsed >= timeout {
-                return Err(Error::api("Request timed out reading body"));
-            }
-
-            let sleep_fut = sleep(
-                asupersync_now,
-                timeout.checked_sub(elapsed).unwrap_or_default(),
-            )
-            .fuse();
-            let read_fut = read_fut.fuse();
-            futures::pin_mut!(sleep_fut, read_fut);
-
-            match select(read_fut, sleep_fut).await {
-                Either::Left((res, _)) => res.map_err(Error::from)?,
-                Either::Right(_) => return Err(Error::api("Request timed out reading body")),
-            }
-        } else {
-            read_fut.await.map_err(Error::from)?
-        };
+            })
+            .await
+            .map_err(|err| {
+                if err.kind() == std::io::ErrorKind::Other
+                    && err
+                        .to_string()
+                        .contains("Request timed out reading body stream")
+                {
+                    Error::api("Request timed out reading body")
+                } else {
+                    Error::from(err)
+                }
+            })?;
 
         match String::from_utf8(bytes) {
             Ok(s) => Ok(s),

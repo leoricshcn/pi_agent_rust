@@ -490,7 +490,7 @@ impl<S> NdjsonStream<S> {
         {
             return Err(self.event_too_large_error());
         }
-        while let Some(pos) = self.buffer.iter().position(|b| *b == b'\n') {
+        while let Some(pos) = memchr::memchr(b'\n', &self.buffer) {
             if pos > self.max_event_bytes {
                 return Err(self.event_too_large_error());
             }

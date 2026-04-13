@@ -242,6 +242,7 @@ impl Provider for CohereProvider {
                             }
 
                             if let Err(e) = state.process_event(&msg.data) {
+                                state.finished = true;
                                 return Some((Err(e), state));
                             }
                         }
