@@ -400,13 +400,6 @@ fn match_json_subset(
             let actual_items = actual
                 .as_array()
                 .ok_or_else(|| format!("expected array, found {}", json_type_name(actual)))?;
-            if actual_items.len() < expected_items.len() {
-                return Err(format!(
-                    "expected array length at least {}, found {}",
-                    expected_items.len(),
-                    actual_items.len()
-                ));
-            }
             let mut candidates: Vec<Vec<usize>> = Vec::with_capacity(expected_items.len());
             for (expected_idx, expected_item) in expected_items.iter().enumerate() {
                 let mut matches = Vec::new();

@@ -271,6 +271,7 @@ pub fn truncate_head(
     let mut byte_count = 0;
     let mut truncated_by = None;
     let mut current_offset = 0;
+    let mut last_line_partial = false;
 
     while current_offset < content.len() {
         if line_count >= max_lines {
@@ -283,13 +284,28 @@ pub fn truncate_head(
         let line_end_with_nl = next_newline.map_or(content.len(), |idx| current_offset + idx + 1);
 
         if line_end_without_nl > max_bytes {
+            let mut byte_limit = max_bytes.min(content.len());
+            if byte_limit < current_offset {
+                truncated_by = Some(TruncatedBy::Bytes);
+                break;
+            }
+            while byte_limit > current_offset && !content.is_char_boundary(byte_limit) {
+                byte_limit -= 1;
+            }
+            if byte_limit > current_offset {
+                byte_count = byte_limit;
+                line_count += 1;
+                last_line_partial = true;
+            }
             truncated_by = Some(TruncatedBy::Bytes);
             break;
         }
 
         if line_end_with_nl > max_bytes {
-            byte_count = line_end_without_nl;
-            line_count += 1;
+            if line_end_without_nl > current_offset {
+                byte_count = line_end_without_nl;
+                line_count += 1;
+            }
             truncated_by = Some(TruncatedBy::Bytes);
             break;
         }
@@ -308,7 +324,7 @@ pub fn truncate_head(
         total_bytes,
         output_lines: line_count,
         output_bytes: byte_count,
-        last_line_partial: false,
+        last_line_partial,
         first_line_exceeds_limit: false,
         max_lines,
         max_bytes,
@@ -384,6 +400,7 @@ pub fn truncate_tail(
     let mut byte_count = 0usize;
     let mut start_idx = content.len();
     let mut partial_output: Option<String> = None;
+    let mut partial_line_truncated = false;
     let mut truncated_by = None;
     let mut last_line_partial = false;
 
@@ -412,12 +429,15 @@ pub fn truncate_tail(
                 // Truncate!
                 // Try to take a partial line if we haven't collected any full lines yet.
                 let remaining = max_bytes.saturating_sub(byte_count);
-                if remaining > 0 && line_count == 0 {
+                if remaining > 0 {
                     let chunk = &content[line_start..start_idx];
                     let truncated_chunk = truncate_string_to_bytes_from_end(chunk, remaining);
                     if !truncated_chunk.is_empty() {
                         partial_output = Some(truncated_chunk);
-                        last_line_partial = true;
+                        partial_line_truncated = true;
+                        if line_count == 0 {
+                            last_line_partial = true;
+                        }
                     }
                 }
                 truncated_by = Some(TruncatedBy::Bytes);
@@ -448,7 +468,7 @@ pub fn truncate_tail(
 
     // Extract the suffix: drain the prefix in-place (reuses the buffer),
     // or use the partial output from the byte-truncation path.
-    let partial_suffix = if last_line_partial {
+    let partial_suffix = if partial_line_truncated {
         Some(content[start_idx..].to_string())
     } else {
         None
@@ -1440,21 +1460,12 @@ impl Tool for ReadTool {
         let path = resolve_read_path(&input.path, &self.cwd);
         let path = enforce_cwd_scope(&path, &self.cwd, "read")?;
 
-        if let Ok(meta) = asupersync::fs::metadata(&path).await {
+        let meta = asupersync::fs::metadata(&path).await.ok();
+        if let Some(meta) = &meta {
             if !meta.is_file() {
                 return Err(Error::tool(
                     "read",
                     format!("Path {} is not a regular file", path.display()),
-                ));
-            }
-            if meta.len() > READ_TOOL_MAX_BYTES {
-                return Err(Error::tool(
-                    "read",
-                    format!(
-                        "File is too large ({} bytes). Max allowed is {} bytes. For large files, use `bash` with `grep`, `head`, `tail`, or `sed`.",
-                        meta.len(),
-                        READ_TOOL_MAX_BYTES
-                    ),
                 ));
             }
         }
@@ -1489,9 +1500,20 @@ impl Tool for ReadTool {
             }
 
             // For images, we must read the whole file to resize/encode.
-            // Since we checked metadata len above, this is safe up to READ_TOOL_MAX_BYTES,
-            // but we double-check against IMAGE_MAX_BYTES using take() to avoid reading
-            // more than necessary into memory.
+            // We guard with metadata (when available) and enforce IMAGE_MAX_BYTES
+            // using take() to avoid reading more than necessary into memory.
+            if let Some(meta) = &meta {
+                if meta.len() > IMAGE_MAX_BYTES as u64 {
+                    return Err(Error::tool(
+                        "read",
+                        format!(
+                            "Image is too large ({} bytes). Max allowed is {} bytes.",
+                            meta.len(),
+                            IMAGE_MAX_BYTES
+                        ),
+                    ));
+                }
+            }
             let mut all_bytes = Vec::with_capacity(initial_read);
             all_bytes.extend_from_slice(initial_bytes);
 
@@ -3625,7 +3647,7 @@ impl Tool for GrepTool {
 
         let tick = Duration::from_millis(10);
 
-        loop {
+        let exit_status = loop {
             drain_rg_stdout(
                 &stdout_rx,
                 &mut matches,
@@ -3636,11 +3658,11 @@ impl Tool for GrepTool {
             drain_rg_stderr(&stderr_rx, &mut stderr_bytes)?;
 
             if match_scan_limit_reached {
-                break;
+                break None;
             }
 
             match guard.try_wait_child() {
-                Ok(Some(_)) => break,
+                Ok(Some(status)) => break Some(status),
                 Ok(None) => {
                     let now = AgentCx::for_current_or_request()
                         .cx()
@@ -3650,7 +3672,7 @@ impl Tool for GrepTool {
                 }
                 Err(e) => return Err(Error::tool("grep", e.to_string())),
             }
-        }
+        };
 
         drain_rg_stdout(
             &stdout_rx,
@@ -3670,11 +3692,8 @@ impl Tool for GrepTool {
             while stderr_rx.try_recv().is_ok() {}
             0
         } else {
-            guard
-                .wait()
-                .map_err(|e| Error::tool("grep", e.to_string()))?
-                .code()
-                .unwrap_or(0)
+            let status = exit_status.expect("rg exit status");
+            status.code().unwrap_or(0)
         };
 
         // Keep draining while waiting for reader threads to finish; otherwise a
@@ -4051,10 +4070,10 @@ impl Tool for FindTool {
         let start_time = std::time::Instant::now();
         let timeout_ms = 60_000; // 60 seconds
 
-        loop {
+        let status = loop {
             // Check if process is done
             match guard.try_wait_child() {
-                Ok(Some(_)) => break,
+                Ok(Some(status)) => break status,
                 Ok(None) => {
                     if start_time.elapsed().as_millis() > timeout_ms {
                         return Err(Error::tool("find", "Command timed out after 60 seconds"));
@@ -4067,11 +4086,7 @@ impl Tool for FindTool {
                 }
                 Err(e) => return Err(Error::tool("find", e.to_string())),
             }
-        }
-
-        let status = guard
-            .wait()
-            .map_err(|e| Error::tool("find", e.to_string()))?;
+        };
 
         let stdout_bytes = stdout_handle
             .join()
@@ -4092,13 +4107,17 @@ impl Tool for FindTool {
         }
 
         if !status.success() && stdout.is_empty() {
-            let code = status.code().unwrap_or(1);
-            let msg = if stderr.is_empty() {
-                format!("fd exited with code {code}")
+            if status.code() == Some(1) && stderr.is_empty() {
+                // fd uses exit code 1 for "no matches"; treat as empty result.
             } else {
-                stderr
-            };
-            return Err(Error::tool("find", msg));
+                let code = status.code().unwrap_or(1);
+                let msg = if stderr.is_empty() {
+                    format!("fd exited with code {code}")
+                } else {
+                    stderr
+                };
+                return Err(Error::tool("find", msg));
+            }
         }
 
         if stdout.is_empty() {
@@ -4639,7 +4658,11 @@ async fn ingest_bash_chunk(chunk: Vec<u8>, state: &mut BashOutputState) -> Resul
         .line_count
         .saturating_add(memchr::memchr_iter(b'\n', &chunk).count());
 
-    if state.total_bytes > DEFAULT_MAX_BYTES && state.temp_file.is_none() && !state.spill_failed {
+    if state.total_bytes > DEFAULT_MAX_BYTES
+        && state.temp_file.is_none()
+        && state.temp_file_path.is_none()
+        && !state.spill_failed
+    {
         let id_full = Uuid::new_v4().simple().to_string();
         let id = &id_full[..16];
         let path = std::env::temp_dir().join(format!("pi-bash-{id}.log"));
@@ -4753,7 +4776,6 @@ async fn ingest_bash_chunk(chunk: Vec<u8>, state: &mut BashOutputState) -> Resul
             if !state.spill_failed {
                 tracing::warn!("Bash output exceeded hard limit; stopping file log");
                 close_spill_file = true;
-                state.spill_failed = true;
             }
         }
         if abandon_spill_file {
@@ -5254,7 +5276,10 @@ impl HashlineOp {
             }
             Some(serde_json::Value::Array(arr)) => arr
                 .iter()
-                .map(|v| normalize_to_lf(v.as_str().unwrap_or("")))
+                .map(|v| match v {
+                    serde_json::Value::String(s) => normalize_to_lf(s),
+                    other => normalize_to_lf(&other.to_string()),
+                })
                 .collect(),
             Some(other) => vec![normalize_to_lf(&other.to_string())],
         }
