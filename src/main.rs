@@ -70,6 +70,13 @@ const USAGE_ERROR_PATTERNS: &[&str] = &[
 ];
 
 fn main() {
+    // On Windows CMD.exe, ANSI escape sequences render as garbage (e.g. "←[92m")
+    // unless we call SetConsoleMode with ENABLE_VIRTUAL_TERMINAL_PROCESSING first.
+    // This must happen before any colored output. Silently ignored on non-Windows
+    // platforms and on older Windows versions that lack VT support.
+    #[cfg(windows)]
+    let _ = enable_ansi_support::enable_ansi_support();
+
     if let Err(err) = main_impl() {
         let exit_code = exit_code_for_error(&err);
         print_error_with_hints(&err);

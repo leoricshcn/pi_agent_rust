@@ -61,6 +61,7 @@ thiserror = "2"
 # Terminal output (rich_rust for beautiful TUI)
 rich_rust = { version = "0.2.0", features = ["full"] }
 crossterm = "0.29"
+enable-ansi-support = "0.2"
 
 # Interactive TUI (charmed_rust - bubbletea/lipgloss/bubbles/glamour)
 bubbletea = { package = "charmed-bubbletea", version = "0.2.0" }
