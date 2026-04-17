@@ -1050,7 +1050,11 @@ fn should_prefer_absolute_path_completion(
         return false;
     }
 
-    if token_text == "/" || token_text.starts_with("/.") || token_text[1..].contains('/') {
+    if token_text == "/" {
+        return false;
+    }
+
+    if token_text.starts_with("/.") || token_text[1..].contains('/') {
         return true;
     }
 
@@ -1969,6 +1973,7 @@ mod tests {
             AutocompleteProvider::new(PathBuf::from("."), AutocompleteCatalog::default());
         let resp = provider.suggest("/", 1);
         let builtin_count = builtin_slash_commands().len();
+        println!("Items: {:?}", resp.items);
         assert_eq!(resp.items.len(), builtin_count);
     }
 
