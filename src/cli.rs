@@ -230,11 +230,10 @@ pub fn parse_with_extension_flags(raw_args: Vec<String>) -> Result<ParsedCli, cl
     }
 
     match Cli::try_parse_from(raw_args.clone()) {
-        Ok(cli) => {
-            return Ok(ParsedCli {
-                cli,
-                extension_flags: Vec::new(),
-            });
+        Ok(_) => {
+            // We do NOT return early here because `Cli` has trailing varargs for `message`.
+            // If the user provided `pi hello --unknown flag`, clap might happily parse
+            // `--unknown flag` into `message`. We must preprocess extension flags first!
         }
         Err(err) => {
             if matches!(
