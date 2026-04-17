@@ -1555,14 +1555,14 @@ mod tests {
             timestamp: Some(0),
         });
         let openai_id =
-            session.append_model_change("openai-codex".to_string(), "gpt-5.4".to_string());
+            session.append_model_change("openai-codex".to_string(), "test-gpt-5.4".to_string());
         assert!(session.create_branch_from(&root_id));
-        session.append_model_change("anthropic".to_string(), "claude-sonnet-4".to_string());
+        session.append_model_change("anthropic".to_string(), "test-claude-sonnet-4".to_string());
         assert!(session.create_branch_from(&openai_id));
 
         let registry = registry_with_entries(vec![
-            test_model_entry("gpt-5.4", "openai-codex", true),
-            test_model_entry("claude-sonnet-4", "anthropic", true),
+            test_model_entry("test-gpt-5.4", "openai-codex", true),
+            test_model_entry("test-claude-sonnet-4", "anthropic", true),
         ]);
 
         let selection =
@@ -1570,7 +1570,7 @@ mod tests {
                 .expect("active branch model should restore");
 
         assert_eq!(selection.model_entry.model.provider, "openai-codex");
-        assert_eq!(selection.model_entry.model.id, "gpt-5.4");
+        assert_eq!(selection.model_entry.model.id, "test-gpt-5.4");
     }
 
     #[test]

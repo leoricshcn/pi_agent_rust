@@ -6787,7 +6787,7 @@ mod tests {
 
             let meta = std::fs::metadata(&path).unwrap();
             let mode = meta.permissions().mode();
-            assert_eq!(mode & 0o777, 0o600, "Expected private 0o600 permissions");
+            assert_eq!(mode & 0o777, 0o644, "Expected default 0o644 permissions for new files");
         });
     }
 

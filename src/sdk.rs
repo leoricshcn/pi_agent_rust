@@ -1771,6 +1771,7 @@ mod tests {
         let options = SessionOptions {
             provider: Some("openai".to_string()),
             model: Some("gpt-4o".to_string()),
+            api_key: Some("dummy-key".to_string()),
             thinking: Some(crate::model::ThinkingLevel::Low),
             working_directory: Some(tmp.path().to_path_buf()),
             no_session: true,
@@ -1875,6 +1876,7 @@ mod tests {
         let options = SessionOptions {
             provider: Some("openai".to_string()),
             model: Some("gpt-4o".to_string()),
+            api_key: Some("dummy-key".to_string()),
             working_directory: Some(tmp.path().to_path_buf()),
             no_session: true,
             ..SessionOptions::default()
