@@ -1316,6 +1316,8 @@ impl Agent {
                     futures::future::Either::Right((event, _abort_fut)) => event,
                 }
             } else {
+                let event_fut = stream.next().fuse();
+                futures::pin_mut!(event_fut);
                 loop {
                     let now = checkpoint_cx
                         .cx()
@@ -1323,10 +1325,9 @@ impl Agent {
                         .map_or_else(asupersync::time::wall_now, |timer| timer.now());
                     let tick_fut =
                         asupersync::time::sleep(now, std::time::Duration::from_millis(25)).fuse();
-                    let event_fut = stream.next().fuse();
-                    futures::pin_mut!(tick_fut, event_fut);
+                    futures::pin_mut!(tick_fut);
 
-                    match futures::future::select(tick_fut, event_fut).await {
+                    match futures::future::select(tick_fut, &mut event_fut).await {
                         futures::future::Either::Left(((), _event_fut)) => {
                             if checkpoint_cx.checkpoint().is_err() {
                                 continue 'stream;
