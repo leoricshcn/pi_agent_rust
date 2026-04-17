@@ -19123,7 +19123,10 @@ fn resolve_extension_entry_file(path: &Path) -> Option<PathBuf> {
     }
 
     JS_EXTENSION_ENTRY_EXTS.iter().find_map(|ext| {
-        let candidate = path.with_extension(ext);
+        let mut candidate = path.as_os_str().to_os_string();
+        candidate.push(".");
+        candidate.push(ext);
+        let candidate = PathBuf::from(candidate);
         if candidate.is_file() {
             Some(safe_canonicalize(&candidate))
         } else {
