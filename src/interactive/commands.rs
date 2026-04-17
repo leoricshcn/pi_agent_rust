@@ -956,7 +956,10 @@ impl PiApp {
                     .model_id()
                     .eq_ignore_ascii_case(&target_entry.model.id);
         if !runtime_matches_target {
-            let resolved_key_opt = resolve_model_key_from_default_auth(&target_entry);
+            let resolved_key_opt = target_entry
+                .api_key
+                .clone()
+                .or_else(|| resolve_model_key_from_default_auth(&target_entry));
             if model_requires_configured_credential(&target_entry) && resolved_key_opt.is_none() {
                 return Err(format!(
                     "Missing credentials for provider {}. Run /login {}.",
