@@ -2115,15 +2115,20 @@ impl Session {
         if let Some(model) = self.latest_model_change_for_current_path() {
             return Some(model);
         }
+        
+        // If a fallback is explicitly stored in the header, use it to prevent
+        // historyless branches from losing context.
+        if let Some(fallback) = self.header.branch_fallback_model_pair() {
+            return Some(fallback);
+        }
+
         // If other branches have model changes but this one doesn't, return None
         // so the header gets cleared (prevents stale metadata)
         if self.has_any_model_change() {
             return None;
         }
-        // No model changes anywhere - use fallback or header values
-        self.header
-            .branch_fallback_model_pair()
-            .or_else(|| self.header.provider.clone().zip(self.header.model_id.clone()))
+        
+        self.header.provider.clone().zip(self.header.model_id.clone())
     }
 
     pub fn effective_thinking_level_for_current_path(&self) -> Option<String> {
@@ -2131,15 +2136,20 @@ impl Session {
         if let Some(level) = self.latest_thinking_level_for_current_path() {
             return Some(level);
         }
+        
+        // If a fallback is explicitly stored in the header, use it to prevent
+        // historyless branches from losing context.
+        if let Some(fallback) = self.header.branch_fallback_thinking_level() {
+            return Some(fallback);
+        }
+
         // If other branches have thinking level changes but this one doesn't, return None
         // so the header gets cleared (prevents stale metadata)
         if self.has_any_thinking_level_change() {
             return None;
         }
-        // No thinking level changes anywhere - use fallback or header value
-        self.header
-            .branch_fallback_thinking_level()
-            .or_else(|| self.header.thinking_level.clone())
+        
+        self.header.thinking_level.clone()
     }
 
     fn has_any_model_change(&self) -> bool {
