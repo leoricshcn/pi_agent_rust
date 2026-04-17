@@ -580,6 +580,7 @@ where
             if !self.started
                 && choice.finish_reason.is_none()
                 && choice.delta.content.is_none()
+                && choice.delta.reasoning_content.is_none()
                 && choice.delta.tool_calls.is_none()
             {
                 self.ensure_started();
