@@ -2031,16 +2031,18 @@ mod tests {
             let result: bool = ctx
                 .eval(
                     r#"
-                    const table = new WebAssembly.Table({ element: "funcref", initial: 1, maximum: 2 });
-                    let ok = false;
-                    try { table.get(0.5); } catch (e) { ok = e instanceof RangeError; }
-                    if (!ok) return false;
-                    ok = false;
-                    try { table.grow(1.25); } catch (e) { ok = e instanceof RangeError; }
-                    if (!ok) return false;
-                    ok = false;
-                    try { table.grow(2); } catch (e) { ok = e instanceof RangeError; }
-                    return ok;
+                    (() => {
+                        const table = new WebAssembly.Table({ element: "funcref", initial: 1, maximum: 2 });
+                        let ok = false;
+                        try { table.get(0.5); } catch (e) { ok = e instanceof RangeError; }
+                        if (!ok) return false;
+                        ok = false;
+                        try { table.grow(1.25); } catch (e) { ok = e instanceof RangeError; }
+                        if (!ok) return false;
+                        ok = false;
+                        try { table.grow(2); } catch (e) { ok = e instanceof RangeError; }
+                        return ok;
+                    })()
                     "#,
                 )
                 .expect("table validation");
@@ -2054,13 +2056,15 @@ mod tests {
             let result: bool = ctx
                 .eval(
                     r"
-                    const mem = new WebAssembly.Memory({ initial: 1, maximum: 1 });
-                    let ok = false;
-                    try { mem.grow(0.5); } catch (e) { ok = e instanceof RangeError; }
-                    if (!ok) return false;
-                    ok = false;
-                    try { mem.grow(1); } catch (e) { ok = e instanceof RangeError; }
-                    return ok;
+                    (() => {
+                        const mem = new WebAssembly.Memory({ initial: 1, maximum: 1 });
+                        let ok = false;
+                        try { mem.grow(0.5); } catch (e) { ok = e instanceof RangeError; }
+                        if (!ok) return false;
+                        ok = false;
+                        try { mem.grow(1); } catch (e) { ok = e instanceof RangeError; }
+                        return ok;
+                    })()
                     ",
                 )
                 .expect("memory validation");
@@ -2358,7 +2362,7 @@ mod tests {
                     var __resp = { arrayBuffer: function() { return new Uint8Array(__test_bytes).buffer; } };
                     WebAssembly.compileStreaming(__resp).then(function(mod) {
                         WebAssembly.instantiate(mod).then(function(r) {
-                            __test_result = r.instance.exports.add(2, 3);
+                            __test_result = r.exports.add(2, 3);
                         });
                     });
                     __test_result;
